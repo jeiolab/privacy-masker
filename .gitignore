@@ -1,0 +1,23 @@
+# 실제 학생 데이터
+data/
+
+# 가명처리 결과물 (변경기록에는 실제 이름이 들어 있음)
+output/
+
+# 실행 로그
+logs/
+
+# 바이트코드
+__pycache__/
+
+# 빌드 결과 (zip 은 GitHub Releases 에 올림)
+dist/
+build/
+
+# 엑셀은 samples/ 안만 보관
+*.xlsx
+!samples/*.xlsx
+
+# 시스템
+.DS_Store
+*.pyc

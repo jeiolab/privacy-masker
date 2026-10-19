@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>개인정보 가리개</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- 상단 바 -->
+  <header class="app-header">
+    <div class="bar">
+      <h1 class="bar-title">개인정보 가리개</h1>
+      <div class="bar-right">
+        <span class="dict-status" id="dict-status">학생 30명 · 10월 18일</span>
+        <button class="btn btn-outline" type="button" data-stub>사전 새로 만들기</button>
+      </div>
+    </div>
+    <!-- 접힌 상태(900px 미만)에서만 보이는 전환 세그먼트 -->
+    <div class="fold-switch">
+      <div class="segmented segmented-full" role="tablist" aria-label="화면 전환">
+        <button class="seg" type="button" role="tab" id="tab-mask" aria-controls="pane-mask" aria-selected="true" data-fold-tab="mask">가리기</button>
+        <button class="seg" type="button" role="tab" id="tab-restore" aria-controls="pane-restore" aria-selected="false" data-fold-tab="restore">되돌리기</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="panels" id="panels" data-active="mask">
+
+    <!-- ======================= 왼쪽 패널: 가리기 ======================= -->
+    <div class="pane" id="pane-mask">
+      <section class="panel" aria-labelledby="mask-title">
+        <div class="panel-head">
+          <p class="kicker">STEP 1</p>
+          <h2 class="headline" id="mask-title">가리기</h2>
+        </div>
+
+        <div class="stack">
+
+          <!-- 카드 "파일" -->
+          <section class="card card-drop" id="drop-card" aria-labelledby="file-title">
+            <h3 class="card-title" id="file-title">파일</h3>
+            <p class="card-desc">pdf, docx, xlsx, pptx, csv, txt, md 파일을 올릴 수 있어요.</p>
+
+            <div class="drop-empty" id="drop-empty">
+              <svg class="icon-doc" viewBox="0 0 48 48" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 5.5h17l9 9V40a2.5 2.5 0 0 1-2.5 2.5h-23.5A2.5 2.5 0 0 1 9.5 40V8A2.5 2.5 0 0 1 12 5.5z"/>
+                <path d="M29 5.5v9h9"/>
+                <path d="M16 24h16M16 30h16M16 36h9"/>
+              </svg>
+              <p class="drop-text">파일을 끌어다 놓거나</p>
+              <button class="btn btn-outline" type="button" data-stub>파일 선택</button>
+            </div>
+
+            <div class="drop-picked" id="drop-picked" hidden>
+              <svg class="icon-doc icon-doc-small" viewBox="0 0 48 48" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 5.5h17l9 9V40a2.5 2.5 0 0 1-2.5 2.5h-23.5A2.5 2.5 0 0 1 9.5 40V8A2.5 2.5 0 0 1 12 5.5z"/>
+                <path d="M29 5.5v9h9"/>
+              </svg>
+              <p class="file-name" id="file-name"></p>
+              <p class="file-kind" id="file-kind"></p>
+              <button class="btn btn-outline" type="button" data-stub>다른 파일 선택</button>
+            </div>
+          </section>
+
+          <!-- 카드 "방식" -->
+          <section class="card" aria-labelledby="mode-title">
+            <h3 class="card-title" id="mode-title">방식</h3>
+            <div class="mode-row">
+              <div class="segmented" role="radiogroup" aria-label="방식 선택" id="mode-seg">
+                <button class="seg" type="button" role="radio" aria-checked="true" data-mode="md">AI용 md<span class="tag-recommend">추천</span></button>
+                <button class="seg" type="button" role="radio" aria-checked="false" data-mode="xlsx">엑셀 원본 형식</button>
+              </div>
+            </div>
+            <p class="card-desc">AI에 올릴 때는 md를 추천해요.</p>
+          </section>
+        </div>
+
+        <!-- 주 버튼: 카드 밖, 왼쪽 정렬 -->
+        <div class="primary-row">
+          <button class="btn btn-primary" type="button" data-stub>가명처리 실행</button>
+        </div>
+
+        <div class="stack">
+          <!-- 카드 "결과" -->
+          <section class="card" id="result-card" data-state="safe" aria-labelledby="result-title">
+            <h3 class="card-title" id="result-title">결과</h3>
+            <p class="card-desc">가려진 내용을 확인한 뒤 복사하세요.</p>
+
+            <div class="status-row" aria-live="polite">
+              <span class="dot" id="status-dot"></span>
+              <span class="status-text" id="status-text">남은 개인정보 없음</span>
+              <button class="link" type="button" id="open-sheet" hidden>목록 보기 ›</button>
+            </div>
+
+            <div class="preview" id="preview" tabindex="0" role="region" aria-label="미리보기"></div>
+
+            <div class="btn-row">
+              <button class="btn btn-outline" type="button" id="copy-result" data-stub>결과 복사</button>
+              <button class="btn btn-outline" type="button" data-stub>폴더 열기</button>
+            </div>
+            <p class="link-row"><button class="link" type="button" data-stub>변경 기록 보기 ›</button></p>
+          </section>
+
+          <!-- ▼▼▼ 임시 미리보기 스위치 (디자인 확인용 - 나중에 이 블록 전체를 지울 것) ▼▼▼ -->
+          <section class="temp-switch" aria-label="임시 미리보기 스위치">
+            <p class="temp-title">임시 미리보기 · 나중에 지울 것</p>
+            <div class="temp-row">
+              <span class="temp-label">결과 상태</span>
+              <div class="segmented" role="radiogroup" aria-label="결과 상태 미리보기" id="temp-state">
+                <button class="seg" type="button" role="radio" aria-checked="true" data-temp-state="safe">안전</button>
+                <button class="seg" type="button" role="radio" aria-checked="false" data-temp-state="warn">확인 필요</button>
+                <button class="seg" type="button" role="radio" aria-checked="false" data-temp-state="danger">위험</button>
+              </div>
+            </div>
+            <div class="temp-row">
+              <span class="temp-label">되돌리기 "확인 필요" 카드</span>
+              <div class="segmented" role="radiogroup" aria-label="확인 필요 카드 미리보기" id="temp-issues">
+                <button class="seg" type="button" role="radio" aria-checked="true" data-temp-issues="show">보임</button>
+                <button class="seg" type="button" role="radio" aria-checked="false" data-temp-issues="hide">숨김</button>
+              </div>
+            </div>
+          </section>
+          <!-- ▲▲▲ 임시 미리보기 스위치 끝 ▲▲▲ -->
+        </div>
+      </section>
+
+      <!-- 시트: 확인 필요 목록 (이 패널 너비 안에서만 올라온다) -->
+      <div class="scrim" id="sheet-scrim" hidden></div>
+      <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" inert>
+        <div class="sheet-handle" id="sheet-handle" aria-hidden="true"></div>
+        <div class="sheet-head">
+          <h3 class="sheet-title" id="sheet-title">확인 필요 3건</h3>
+          <button class="link" type="button" id="close-sheet">닫기</button>
+        </div>
+        <ul class="issue-list">
+          <li class="issue">
+            <div class="issue-meta"><span class="issue-kind">사전에없음</span><span class="issue-where">3번째 줄</span></div>
+            <code class="issue-body">010-0000-0000 → [전화번호]</code>
+          </li>
+          <li class="issue">
+            <div class="issue-meta"><span class="issue-kind">동명이인확인</span><span class="issue-where">7번째 줄</span></div>
+            <code class="issue-body">정하윤 → 학생007또는026</code>
+          </li>
+          <li class="issue">
+            <div class="issue-meta"><span class="issue-kind">동명이인확인</span><span class="issue-where">15번째 줄</span></div>
+            <code class="issue-body">지아이 → 학생008또는022또는023</code>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- 힌지: 펼친 상태에서만 보이는 세로선 -->
+    <div class="hinge" aria-hidden="true"></div>
+
+    <!-- ======================= 오른쪽 패널: 되돌리기 ======================= -->
+    <div class="pane" id="pane-restore">
+      <section class="panel" aria-labelledby="restore-title">
+        <div class="panel-head">
+          <p class="kicker">STEP 2</p>
+          <h2 class="headline" id="restore-title">되돌리기</h2>
+        </div>
+
+        <div class="stack">
+          <!-- 카드 "AI 답변" -->
+          <section class="card" aria-labelledby="answer-title">
+            <h3 class="card-title" id="answer-title">AI 답변</h3>
+            <p class="card-desc">AI가 돌려준 글을 그대로 붙여 넣으세요.</p>
+            <textarea class="textbox" id="answer-input" placeholder="AI 답변을 붙여 넣으세요" aria-label="AI 답변"></textarea>
+            <div class="btn-row">
+              <button class="btn btn-outline" type="button" data-stub>클립보드에서 바로 복원</button>
+            </div>
+          </section>
+        </div>
+
+        <div class="primary-row">
+          <button class="btn btn-primary" type="button" data-stub>복원</button>
+        </div>
+
+        <div class="stack">
+          <!-- 카드 "복원 결과" -->
+          <section class="card" aria-labelledby="restored-title">
+            <h3 class="card-title" id="restored-title">복원 결과</h3>
+            <p class="card-desc">실명이 들어 있으니 AI에 다시 올리지 마세요.</p>
+            <textarea class="textbox" id="restored-output" placeholder="복원된 글이 여기에 보여요" aria-label="복원 결과" readonly></textarea>
+            <div class="btn-row">
+              <button class="btn btn-outline" type="button" data-stub>복사</button>
+            </div>
+          </section>
+
+          <!-- 카드 "확인 필요": 복원 못 한 코드 (없으면 숨김) -->
+          <section class="card" id="issues-card" aria-labelledby="issues-title">
+            <h3 class="card-title" id="issues-title">확인 필요</h3>
+            <p class="card-desc">복원하지 못한 코드예요.</p>
+            <ul class="issue-list">
+              <li class="issue">
+                <div class="issue-meta"><span class="issue-kind">학생099</span><span class="issue-where">2번째 줄</span></div>
+                <span class="issue-body-text">사전에 없는 번호예요. AI가 만든 코드일 수 있어요.</span>
+              </li>
+              <li class="issue">
+                <div class="issue-meta"><span class="issue-kind">[이메일]</span><span class="issue-where">2번째 줄</span></div>
+                <span class="issue-body-text">원래 값이 사전에 없어서 복원할 수 없어요.</span>
+              </li>
+            </ul>
+          </section>
+        </div>
+
+        <p class="link-row link-row-end"><button class="link" type="button" data-stub>파일 복원 ›</button></p>
+      </section>
+    </div>
+
+  </main>
+
+  <!-- 알림창 -->
+  <div class="dialog-scrim" id="dialog-scrim" hidden>
+    <div class="dialog" id="dialog" role="alertdialog" aria-modal="true" aria-labelledby="dialog-title">
+      <h2 class="dialog-title" id="dialog-title">아직 연결 안 됨</h2>
+      <div class="dialog-buttons">
+        <button class="btn btn-outline" type="button" id="dialog-cancel">취소</button>
+        <button class="btn btn-primary" type="button" id="dialog-ok">확인</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 토스트 -->
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
