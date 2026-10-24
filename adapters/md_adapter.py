@@ -1,7 +1,9 @@
 """여러 형식의 파일을 md(글)로 바꾼 뒤 가명처리하는 어댑터.
 
 - .pdf .docx .xlsx .pptx .csv : markitdown 으로 md 변환 (LLM·이미지 설명·외부 서비스·플러그인 안 씀)
-- .hwp .hwpx                  : pyhwpx 로 한글을 백그라운드로 열어 임시 HTML 로 저장 후 markitdown 으로 변환
+                               워드 머리말·꼬리말·메모·각주, 피피티 슬라이드 노트는 따로 뽑아 '부가 정보'로 덧붙임
+- .hwpx                       : ZIP+XML 을 읽어 md 로 바꾼다 (한글 프로그램 불필요)
+- .hwp                        : pyhwpx 로 한글을 백그라운드로 열어 임시 HTML 로 저장 후 markitdown 으로 변환
                                (머리말·꼬리말·메모는 따로 뽑아 '부가 정보'로 덧붙임, Windows+한글 설치 환경 전용)
 - .txt .md                    : 그대로 읽음
 - 변환한 원본 md(실명이 있는 글)는 메모리에서만 다루고 파일로 저장하지 않는다.
@@ -42,7 +44,7 @@ def decode_text(raw):
             return raw.decode(enc)
         except UnicodeDecodeError:
             continue
-    raise ValueError("글자 인코딩을 알 수 없습니다 (UTF-8 또는 CP949만 지원)")
+    raise ValueError("글자를 읽지 못했어요. UTF-8 또는 한글(CP949) 파일만 돼요.")
 
 
 def find_scanned_pages(path):
@@ -61,16 +63,134 @@ def to_markdown(path):
     ext = path.suffix.lower()
     if ext in TEXT_EXTS:
         return decode_text(path.read_bytes())
+    if ext == ".hwpx":
+        from adapters.hwpx_adapter import hwpx_to_markdown
+        return hwpx_to_markdown(path)
     if ext in HWP_EXTS:
         return _hwp_to_markdown(path)
     if ext not in CONVERT_EXTS:
-        raise ValueError(f"지원하지 않는 형식입니다: {ext}")
+        raise ValueError(f"이 형식은 쓸 수 없어요: {ext}")
 
     from markitdown import MarkItDown
     # llm_client 등을 주지 않고 플러그인도 끄면 이미지 설명(LLM)·외부 서비스를 쓰지 않는다.
     converter = MarkItDown(enable_plugins=False)
     # convert() 는 http:// 주소도 받아들이므로, 로컬 파일만 받는 convert_local() 을 쓴다.
-    return converter.convert_local(str(path), keep_data_uris=False).text_content
+    text = converter.convert_local(str(path), keep_data_uris=False).text_content
+    extra = office_extra_markdown(path)
+    if extra:
+        return text.rstrip() + "\n\n" + extra
+    return text
+
+
+def office_extra_markdown(path):
+    """워드 머리말·꼬리말·메모·각주, 피피티 슬라이드 노트를 md 조각으로 붙인다. 없으면 빈 글."""
+    ext = Path(path).suffix.lower()
+    if ext == ".docx":
+        return _docx_extra_info(path)
+    if ext == ".pptx":
+        return _pptx_extra_info(path)
+    return ""
+
+
+def _format_extra_sections(sections):
+    lines = []
+    for title, items in sections:
+        if not items:
+            continue
+        lines.append(f"### {title}")
+        lines.extend(f"- {item}" for item in items)
+        lines.append("")
+    if not lines:
+        return ""
+    return "## 부가 정보\n\n" + "\n".join(lines).rstrip() + "\n"
+
+
+def _docx_part_texts(part, tag):
+    """docx XML 파트에서 w:t 글자를 모아 목록으로 돌린다."""
+    from docx.oxml.ns import qn
+    texts = []
+    for node in part.element.findall(qn(tag)):
+        joined = "".join((t.text or "") for t in node.iter(qn("w:t"))).strip()
+        if joined:
+            texts.append(joined)
+    return texts
+
+
+def _docx_hf_texts(header_or_footer):
+    texts = [p.text.strip() for p in header_or_footer.paragraphs if p.text.strip()]
+    for table in header_or_footer.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                t = cell.text.strip()
+                if t:
+                    texts.append(t)
+    return texts
+
+
+def _docx_extra_info(path):
+    try:
+        from docx import Document
+    except ImportError:
+        return ""
+    try:
+        doc = Document(str(path))
+    except Exception:
+        return ""
+    headers, footers = [], []
+    for section in doc.sections:
+        headers.extend(_docx_hf_texts(section.header))
+        footers.extend(_docx_hf_texts(section.footer))
+    comments, footnotes, endnotes = [], [], []
+    for rel in doc.part.rels.values():
+        kind = (rel.reltype or "").lower()
+        try:
+            part = rel.target_part
+        except Exception:
+            continue
+        if "comments" in kind:
+            comments.extend(_docx_part_texts(part, "w:comment"))
+        elif "footnotes" in kind:
+            footnotes.extend(_docx_part_texts(part, "w:footnote"))
+        elif "endnotes" in kind:
+            endnotes.extend(_docx_part_texts(part, "w:endnote"))
+    return _format_extra_sections([
+        ("머리말", list(dict.fromkeys(headers))),
+        ("꼬리말", list(dict.fromkeys(footers))),
+        ("메모", list(dict.fromkeys(comments))),
+        ("각주", list(dict.fromkeys(footnotes))),
+        ("미주", list(dict.fromkeys(endnotes))),
+    ])
+
+
+def _pptx_extra_info(path):
+    try:
+        from pptx import Presentation
+    except ImportError:
+        return ""
+    try:
+        prs = Presentation(str(path))
+    except Exception:
+        return ""
+    notes, comments = [], []
+    for i, slide in enumerate(prs.slides, 1):
+        if getattr(slide, "has_notes_slide", False):
+            try:
+                text = (slide.notes_slide.notes_text_frame.text or "").strip()
+            except Exception:
+                text = ""
+            if text:
+                notes.append(f"{i}번째 슬라이드: {text}")
+        try:
+            for c in getattr(slide, "comments", []) or []:
+                t = (getattr(c, "text", "") or "").strip()
+                if t:
+                    comments.append(f"{i}번째 슬라이드: {t}")
+        except Exception:
+            pass
+    return _format_extra_sections([
+        ("슬라이드 노트", notes),
+        ("메모", comments),
+    ])
 
 
 # ── 한글(.hwp/.hwpx) 전용 처리 ──────────────────────────────────────────────
@@ -184,9 +304,9 @@ def prepare_excel_markdown(text):
     return "".join(pieces), added
 
 
-def mask_markdown(text, dictionary, added_zero=frozenset()):
+def mask_markdown(text, dictionary, added_zero=frozenset(), kinds=None):
     """md 글을 가명처리한다. (가명처리된 글, 변경 목록 [[줄, 원래 값, 바뀐 값, 종류], ...])."""
-    masked, ch = mask_text(text, dictionary)
+    masked, ch = mask_text(text, dictionary, kinds)
     changes = []
     for original, new, kind, pos in ch:
         if pos in added_zero:   # 우리가 붙인 0은 원래 값에서 뺀다
@@ -195,19 +315,18 @@ def mask_markdown(text, dictionary, added_zero=frozenset()):
     return masked, changes
 
 
-def extra_name_map(words):
-    """확정한 이름 단어들을 [이름1], [이름2] ... 코드로 매긴다. ({코드: 단어}, 순서 유지)"""
+def extra_name_map(words, start=1):
+    """확정한 이름 단어들을 [이름N] 코드로 매긴다. ({코드: 단어}, 순서 유지)"""
     uniq = list(dict.fromkeys(w for w in words if w))
-    return {f"[이름{i}]": w for i, w in enumerate(uniq, start=1)}
+    return {f"[이름{i}]": w for i, w in enumerate(uniq, start=start)}
 
 
-def apply_extra_names(text, words):
-    """사용자가 '이 단어도 가리기'로 고른 이름 단어를 [이름N] 으로 바꾼다.
+def apply_extra_names(text, words, start=1):
+    """이름 단어를 [이름N] 으로 바꾼다.
 
-    자동 탐지가 아니라, 사람이 고른 단어만 바꾼다. 앞뒤가 한글이 아닐 때만 바꿔 조각 치환을 막는다.
     (바뀐 글, 변경목록 [[줄, 원래, 바뀐, 종류], ...], {코드: 단어}) 를 돌려준다.
     """
-    name_map = extra_name_map(words)
+    name_map = extra_name_map(words, start=start)
     if not name_map:
         return text, [], {}
     word_to_code = {w: c for c, w in name_map.items()}
@@ -224,8 +343,9 @@ def apply_extra_names(text, words):
     return pat.sub(repl, text), changes, name_map
 
 
-def write_md_change_log(changes, path):
+def write_md_change_log(changes, path, name_map=None):
     """보관용 변경기록 엑셀: 줄, 원래 값, 바뀐 값, 종류."""
+    from adapters.excel_adapter import append_name_map_sheet
     wb = Workbook()
     ws = wb.active
     ws.title = "변경기록"
@@ -244,4 +364,5 @@ def write_md_change_log(changes, path):
         longest = max((len(str(c.value or "")) for c in ws[letter]), default=8)
         ws.column_dimensions[letter].width = min(max(longest + 3, 10), 60)
     ws.freeze_panes = "A2"
+    append_name_map_sheet(wb, name_map)
     wb.save(path)

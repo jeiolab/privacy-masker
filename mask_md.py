@@ -42,8 +42,8 @@ def main(argv):
     if ext not in SUPPORTED_EXTS:
         print(f"[오류] 지원하지 않는 형식입니다: {ext}  (지원: " + " ".join(sorted(SUPPORTED_EXTS)) + ")")
         return 1
-    # 한글(.hwp/.hwpx)은 한글이 설치된 Windows 에서만 처리할 수 있다
-    if ext in HWP_EXTS and sys.platform != "win32":
+    # .hwp 만 한글 프로그램이 필요하다. .hwpx 는 ZIP+XML 이라 어디서나 된다.
+    if ext == ".hwp" and sys.platform != "win32":
         print(HWP_WINDOWS_ONLY_MSG)
         return 1
     try:

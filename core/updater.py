@@ -16,16 +16,16 @@ from core.version import VERSION
 def update_how_to(download=""):
     """알림창·받는 페이지에 보여 줄 안내. download 주소가 있으면 1번에 같이 적는다."""
     url = (download or getattr(config, "DOWNLOAD_URL", "") or "").strip()
-    step1 = "1. 개인정보가리개.zip 을 받는다"
+    step1 = "1. 개인정보가리개.zip 을 받으세요"
     if url:
         step1 += f"\n   {url}"
     return (
-        "이렇게 바꾸면 됩니다.\n"
+        "이렇게 바꾸세요.\n"
         f"{step1}\n"
-        "2. 압축을 풀어 지금 쓰는 프로그램 폴더에 그대로 덮어쓴다\n"
-        "3. 개인정보가리개.exe 를 다시 실행한다\n"
+        "2. 압축을 풀어 지금 쓰는 프로그램 폴더에 덮어쓰세요\n"
+        "3. 개인정보가리개.exe 를 다시 실행하세요\n"
         "\n"
-        "문서 폴더의 개인정보가리개_데이터 는 지우지 마세요. (사전과 결과가 들어 있습니다)"
+        "문서 폴더의 개인정보가리개_데이터 는 지우지 마세요. 명단과 결과가 들어 있어요."
     )
 
 

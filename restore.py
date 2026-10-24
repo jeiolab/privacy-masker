@@ -11,10 +11,11 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from adapters.excel_adapter import restore_workbook, safe_filename
+from adapters.excel_adapter import load_name_map, restore_workbook, safe_filename
 from core import config
 from core.masker import load_dictionary
 from core.restorer import unmask_text
+from workflows import find_keep_log
 
 BASE_DIR = config.user_data_dir()
 DICT_PATH = config.dict_path()
@@ -29,7 +30,7 @@ def read_text(path):
             return raw.decode(enc)
         except UnicodeDecodeError:
             continue
-    raise ValueError("글자 인코딩을 알 수 없습니다 (UTF-8 또는 CP949만 지원)")
+    raise ValueError("글자를 읽지 못했어요. UTF-8 또는 한글(CP949) 파일만 돼요.")
 
 
 def print_summary(changes, warnings):
@@ -84,16 +85,20 @@ def main(argv):
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     stem = safe_filename(src.stem)
+    extra = {}
+    keep = find_keep_log(src)
+    if keep:
+        extra = load_name_map(keep)
     try:
         if ext == ".xlsx":
             out = OUT_DIR / f"{stem}_복원.xlsx"
             if out.resolve() == src.resolve():
                 print("[오류] 입력 파일이 결과 파일과 같습니다.")
                 return 1
-            changes, warnings = restore_workbook(src, out, dictionary)
+            changes, warnings = restore_workbook(src, out, dictionary, extra=extra)
         else:
             out = OUT_DIR / f"{stem}_복원.txt"
-            restored, changes, warnings = unmask_text(read_text(src), dictionary)
+            restored, changes, warnings = unmask_text(read_text(src), dictionary, extra)
             out.write_text(restored, encoding="utf-8")
     except Exception as e:  # 손상 파일, 인코딩 문제 등
         print(f"[오류] 복원하지 못했습니다: {e}")

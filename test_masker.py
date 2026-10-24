@@ -78,8 +78,8 @@ def build_cases(d):
             absent=[dup, a["학번"]], present=[a["학생코드"], a["S코드"]])
         add("5-2) 동명이인 + 학번 없음", f"{dup}{josa(dup, '이', '가')} 복도에서 뛰었다.",
             absent=[dup], present=[f"{a['학생코드']}또는{b['번호']}"],
-            roundtrip="누구인지 정할 수 없음 (동명이인-확인필요)",
-            restore={"contains": [f"{dup}(동명이인-확인필요)"], "warnings": 1})
+            roundtrip="누구인지 정할 수 없음 (동명이인)",
+            restore={"contains": [f"{dup}(동명이인)"], "warnings": 1})
 
     # 6) 학번이 더 긴 숫자 안에 들어간 경우
     s = plain[2]

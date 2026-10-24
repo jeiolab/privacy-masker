@@ -7,6 +7,7 @@
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
+from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.cell.cell import MergedCell
@@ -49,15 +50,29 @@ def _unique_title(base, used):
     return candidate
 
 
-def _mask_value(value, dictionary):
+def _stringify_cell(value):
+    """칸 값을 글자로. 서식 있는 글(CellRichText)도 일반 글로 본다."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        from openpyxl.cell.rich_text import CellRichText
+        if isinstance(value, CellRichText):
+            value = str(value)
+    except ImportError:
+        pass
+    return value
+
+
+def _mask_value(value, dictionary, kinds=None):
     """칸 값 하나를 치환한다. 바뀌면 (새 값, [[원래, 바뀐, 종류], ...]), 아니면 None."""
+    value = _stringify_cell(value)
     if isinstance(value, bool) or value is None:
         return None
 
     if isinstance(value, str):
         if value.startswith("="):          # 수식은 건드리지 않음
             return None
-        new, ch = mask_text(value, dictionary)
+        new, ch = mask_text(value, dictionary, kinds)
         return (new, [[o, n, k] for o, n, k, _ in ch]) if ch else None
 
     if isinstance(value, (int, float)):
@@ -68,12 +83,12 @@ def _mask_value(value, dictionary):
         shown = str(value)
         # 엑셀에서 앞 0이 빠진 휴대폰 번호(1012345678)는 0을 붙여 전화번호로 본다
         text = "0" + shown if len(shown) == 10 and shown.startswith("10") else shown
-        new, ch = mask_text(text, dictionary)
+        new, ch = mask_text(text, dictionary, kinds)
         return (new, [[shown, n, k] for _, n, k, _ in ch]) if ch else None
 
     if isinstance(value, (datetime, date)):  # 생년월일이 날짜 칸으로 들어 있는 경우
         shown = value.strftime("%Y-%m-%d")
-        new, ch = mask_text(shown, dictionary)
+        new, ch = mask_text(shown, dictionary, kinds)
         return (new, [[o, n, k] for o, n, k, _ in ch]) if ch else None
 
     return None
@@ -149,33 +164,80 @@ def _walk_workbook(src_path, dst_path, fn):
     return changes, warnings
 
 
-def mask_workbook(src_path, dst_path, dictionary):
+def _cell_scan_text(value):
+    """가릴 항목을 찾을 때 칸 하나를 글자로. 가리기와 같은 모양(앞 0이 빠진 번호 포함)으로 본다."""
+    value = _stringify_cell(value)
+    if isinstance(value, bool) or value is None:
+        return ""
+    if isinstance(value, str):
+        return "" if value.startswith("=") else value
+    if isinstance(value, (int, float)):
+        if isinstance(value, float):
+            if not value.is_integer():
+                return ""
+            value = int(value)
+        shown = str(value)
+        return "0" + shown if len(shown) == 10 and shown.startswith("10") else shown
+    if isinstance(value, (datetime, date)):
+        return value.strftime("%Y-%m-%d")
+    return ""
+
+
+def workbook_plain_text(path):
+    """시트 이름, 칸, 메모를 한 글로 잇는다. 수식 칸은 빼 둔다. 원본은 저장하지 않는다."""
+    wb = load_workbook(path)
+    parts = []
+    try:
+        for ws in wb.worksheets:
+            parts.append(ws.title)
+            for row in ws.iter_rows():
+                for cell in row:
+                    if isinstance(cell, MergedCell):
+                        continue
+                    if cell.data_type == "f":
+                        text = ""
+                    else:
+                        text = _cell_scan_text(cell.value)
+                    if text:
+                        parts.append(text)
+                    if cell.comment is not None:
+                        if cell.comment.text:
+                            parts.append(cell.comment.text)
+                        if cell.comment.author:
+                            parts.append(cell.comment.author)
+    finally:
+        wb.close()
+    return "\n".join(parts)
+
+
+def mask_workbook(src_path, dst_path, dictionary, kinds=None):
     """src_path 를 가명처리해서 dst_path 에 저장. (변경 목록, 경고 목록)을 돌려준다."""
     def fn(value):
-        r = _mask_value(value, dictionary)
+        r = _mask_value(value, dictionary, kinds)
         return (r[0], r[1], []) if r else None
     return _walk_workbook(src_path, dst_path, fn)
 
 
-def restore_workbook(src_path, dst_path, dictionary):
+def restore_workbook(src_path, dst_path, dictionary, extra=None):
     """가명처리된 엑셀(AI가 돌려준 파일)을 실명으로 복원해서 저장. (변경 목록, 경고 목록)."""
+    extra = extra or {}
     def fn(value):
         if not isinstance(value, str) or value.startswith("="):
             return None
-        new, ch, warns = unmask_text(value, dictionary)
+        new, ch, warns = unmask_text(value, dictionary, extra)
         if not ch and not warns:
             return None
         return new, [[o, n, k] for o, n, k, _ in ch], warns
     return _walk_workbook(src_path, dst_path, fn)
 
 
-def apply_extra_names_workbook(path, words):
-    """가명처리된 엑셀에서, 사용자가 고른 이름 단어를 [이름N] 으로 바꿔 덮어쓴다.
+def apply_extra_names_workbook(path, words, start=1):
+    """가명처리된 엑셀에서 이름 단어를 [이름N] 으로 바꿔 덮어쓴다.
 
     (Change 목록, {코드: 단어}) 를 돌려준다. 수식 칸은 건드리지 않는다.
     """
     uniq = list(dict.fromkeys(w for w in words if w))
-    name_map = {f"[이름{i}]": w for i, w in enumerate(uniq, start=1)}
+    name_map = {f"[이름{i}]": w for i, w in enumerate(uniq, start=start)}
     if not name_map:
         return [], {}
     word_to_code = {w: c for c, w in name_map.items()}
@@ -208,7 +270,51 @@ def apply_extra_names_workbook(path, words):
     return changes, name_map
 
 
-def write_change_log(changes, path):
+def append_name_map_sheet(wb, name_map):
+    """변경기록 엑셀에 [이름N] ↔ 원래 단어 시트를 붙인다. 없으면 만들지 않는다."""
+    if not name_map:
+        return
+    ws = wb.create_sheet("이름대응")
+    ws.append(["코드", "원래 단어"])
+    for c in ws[1]:
+        c.font = Font(bold=True)
+    for code, word in name_map.items():
+        ws.append([code, word])
+    for row in ws.iter_rows():
+        for cell in row:
+            if isinstance(cell.value, str):
+                cell.data_type = "s"
+            cell.number_format = "@"
+    for i in range(1, 3):
+        letter = get_column_letter(i)
+        longest = max((len(str(c.value or "")) for c in ws[letter]), default=8)
+        ws.column_dimensions[letter].width = min(max(longest + 3, 10), 40)
+    ws.freeze_panes = "A2"
+
+
+def load_name_map(path):
+    """변경기록 엑셀의 이름대응 시트에서 {코드: 원래 단어} 를 읽는다. 없으면 빈 dict."""
+    path = Path(path)
+    if not path.exists():
+        return {}
+    wb = load_workbook(path, read_only=True, data_only=True)
+    try:
+        if "이름대응" not in wb.sheetnames:
+            return {}
+        out = {}
+        for i, row in enumerate(wb["이름대응"].iter_rows(values_only=True)):
+            if i == 0 or not row:
+                continue
+            code = str(row[0] or "").strip()
+            word = str(row[1] or "").strip() if len(row) > 1 else ""
+            if code.startswith("[이름") and word:
+                out[code] = word
+        return out
+    finally:
+        wb.close()
+
+
+def write_change_log(changes, path, name_map=None):
     """보관용 변경기록 엑셀: 시트, 칸 위치, 원래 값, 바뀐 값, 종류."""
     wb = Workbook()
     ws = wb.active
@@ -228,4 +334,5 @@ def write_change_log(changes, path):
         longest = max((len(str(c.value or "")) for c in ws[letter]), default=8)
         ws.column_dimensions[letter].width = min(max(longest + 3, 10), 60)
     ws.freeze_panes = "A2"
+    append_name_map_sheet(wb, name_map)
     wb.save(path)

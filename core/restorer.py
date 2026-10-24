@@ -49,7 +49,20 @@ _VALUE_FIELD = {
 }
 _PARTICLE_PAIRS = [("이", "가"), ("은", "는"), ("을", "를"), ("과", "와"),
                    ("아", "야"), ("이랑", "랑"), ("이라고", "라고")]
-DUP_MARK = "(동명이인-확인필요)"
+DUP_MARK = "(동명이인)"
+_FIELD_SAY = {
+    "성명": "이름",
+    "보호자명": "보호자 이름",
+    "학번": "학번",
+    "학생연락처": "학생 연락처",
+    "보호자연락처": "보호자 연락처",
+    "주소": "주소",
+    "생년월일": "생년월일",
+}
+
+
+def _say_field(field):
+    return _FIELD_SAY.get(field, field)
 
 
 def fix_particle(name, particle):
@@ -118,11 +131,11 @@ def unmask_text(text, dictionary, extra=None):
             s = by_num.get(n)
             if s is None:
                 if strict:
-                    warn(pos, f"{original}: 사전에 없는 번호입니다 (AI가 만든 코드일 수 있음) - 그대로 둠")
+                    warn(pos, f"{original}: 명단에 없는 번호예요. 그대로 두었어요")
                 return None
             f = field(prefix)
             if not s.get(f):
-                warn(pos, f"{original}: 사전에 '{f}' 값이 없어 복원할 수 없음 - 그대로 둠")
+                warn(pos, f"{original}: 명단에 {_say_field(f)} 값이 없어 되돌리지 못하고 그대로 두었어요")
                 return None
             values.append(s[f])
         return values
@@ -139,22 +152,22 @@ def unmask_text(text, dictionary, extra=None):
         uniq = _unique(values)
         if len(uniq) == 1:
             return finish(original, pos, uniq[0], kind)
-        out = " 또는 ".join(uniq) + "(확인필요)"
-        warn(pos, f"{original}: 후보가 여러 개라 하나로 정할 수 없음 → {out}")
+        out = " 또는 ".join(uniq) + "(확인해 주세요)"
+        warn(pos, f"{original}: 후보가 여러 개라 하나로 정하지 못했어요 → {out}")
         return finish(original, pos, out, "중복확인")
 
     def repl(m):
         original, pos = m.group(0), m.start()
 
         if m.group("unknown") is not None:
-            warn(pos, f"{original}: 원래 값이 사전에 없어 복원할 수 없음 - 그대로 둠")
+            warn(pos, f"{original}: 명단에 없는 글이라 되돌리지 못하고 그대로 두었어요")
             return original
 
         if m.group("ename") is not None:
             word = extra.get(original)
             if word:
                 return finish(original, pos, word, "이름의심")
-            warn(pos, f"{original}: 이 문서의 변경기록이 없어 복원할 수 없음 - 그대로 둠")
+            warn(pos, f"{original}: 이 파일의 기록이 없어 되돌리지 못하고 그대로 두었어요")
             return original
 
         if m.group("bracket") is not None:
@@ -179,10 +192,10 @@ def unmask_text(text, dictionary, extra=None):
             for n in nums:
                 s = by_staff.get(n)
                 if s is None:
-                    warn(pos, f"{code}: 사전에 없는 교사 번호입니다 (AI가 만든 코드일 수 있음) - 그대로 둠")
+                    warn(pos, f"{code}: 명단에 없는 선생님 번호예요. 그대로 두었어요")
                     return original
                 if not s.get("성명"):
-                    warn(pos, f"{code}: 사전에 '성명' 값이 없어 복원할 수 없음 - 그대로 둠")
+                    warn(pos, f"{code}: 명단에 이름이 없어 되돌리지 못하고 그대로 두었어요")
                     return original
                 values.append(s["성명"])
             uniq = _unique(values)
@@ -190,7 +203,7 @@ def unmask_text(text, dictionary, extra=None):
                 out = uniq[0] + (fix_particle(uniq[0], part) if part else "")
                 return finish(original, pos, out, "교직원")
             out = "/".join(uniq) + DUP_MARK + (part or "")
-            warn(pos, f"{code}: 후보가 여럿이라 하나로 정할 수 없음 → {out}")
+            warn(pos, f"{code}: 같은 이름이 여러 명이라 한 사람으로 정하지 못했어요 → {out}")
             return finish(original, pos, out, "동명이인확인")
 
         # 학생003 / 보호자003 (이름)
@@ -226,7 +239,7 @@ def unmask_text(text, dictionary, extra=None):
                 out += fix_particle(out, part)
             return finish(original, pos, out, "보호자명")
         out = "/".join(uniq) + DUP_MARK
-        warn(pos, f"{code}: 후보가 여럿이라 하나로 정할 수 없음 → {out}")
+        warn(pos, f"{code}: 같은 이름이 여러 명이라 한 사람으로 정하지 못했어요 → {out}")
         if part:
             out += part
         return finish(original, pos, out, "동명이인확인")

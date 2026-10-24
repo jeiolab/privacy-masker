@@ -24,7 +24,7 @@ from core.masker import mask_text
 HWP_EXTS = {".hwp", ".hwpx"}
 HWP_WINDOWS_ONLY_MSG = "한글 파일은 한글이 설치된 Windows 에서만 처리할 수 있어요"
 # 동명이인이 있을 때 보여줄 경고 (원본 형식 유지 방식은 전역 바꾸기라 부정확할 수 있음)
-DUPLICATE_WARNING = "⚠ 동명이인이 있어 원본 형식 유지 방식은 부정확할 수 있어요. md 방식을 추천해요."
+DUPLICATE_WARNING = "⚠ 같은 이름이 있어 ‘원래 형식’은 정확하지 않을 수 있어요. ‘AI에 올릴 글’을 이용해 주세요."
 
 
 class HwpWindowsOnlyError(RuntimeError):
@@ -86,7 +86,7 @@ def _dedupe_changes(raw_changes):
     return items
 
 
-def mask_hwp(src_path, dst_path, dictionary, confirm_duplicate=None):
+def mask_hwp(src_path, dst_path, dictionary, confirm_duplicate=None, kinds=None):
     """원본을 dst 로 복사한 뒤 복사본만 열어 서식 그대로 가명처리하고 저장한다.
 
     Args:
@@ -123,7 +123,7 @@ def mask_hwp(src_path, dst_path, dictionary, confirm_duplicate=None):
 
         # 2) 문서 전체 글자(표·머리말·꼬리말·메모 포함)를 꺼내 mask_text 로 변경 목록을 얻는다
         text = _collect_text(hwp)
-        _, raw_changes = mask_text(text, dictionary)
+        _, raw_changes = mask_text(text, dictionary, kinds)
         items = _dedupe_changes(raw_changes)
         duplicates = any(kind == "동명이인확인" for _, _, kind, _ in items)
 
@@ -148,7 +148,7 @@ def mask_hwp(src_path, dst_path, dictionary, confirm_duplicate=None):
 
         # 5) 저장 후 다시 열어서 글자를 꺼내 검사한다
         hwp.open(str(dst_path))
-        findings = check_text(_collect_text(hwp), dictionary)
+        findings = check_text(_collect_text(hwp), dictionary, kinds)
 
         return {"status": "done", "changes": items, "findings": findings, "duplicates": duplicates}
     finally:
@@ -160,11 +160,40 @@ def mask_hwp(src_path, dst_path, dictionary, confirm_duplicate=None):
                 pass
 
 
-def write_hwp_change_log(changes, path):
+def apply_extra_names_hwp(path, words):
+    """가명처리된 .hwp 에서 사용자가 고른 단어를 [이름N] 으로 바꾼다 (한글 설치 필요)."""
+    if sys.platform != "win32":
+        raise HwpWindowsOnlyError(HWP_WINDOWS_ONLY_MSG)
+    uniq = list(dict.fromkeys(w for w in words if w))
+    name_map = {f"[이름{i}]": w for i, w in enumerate(uniq, start=1)}
+    if not name_map:
+        return [], {}
+    from pyhwpx import Hwp
+    hwp = None
+    items = []
+    try:
+        hwp = Hwp(new=True, visible=False)
+        hwp.set_visible(False)
+        hwp.open(str(path))
+        for code, word in name_map.items():
+            hwp.find_replace_all(word, code)
+            items.append((word, code, "이름의심확정", 1))
+        hwp.save(save_if_dirty=False)
+    finally:
+        if hwp is not None:
+            try:
+                hwp.quit()
+            except Exception:
+                pass
+    return items, name_map
+
+
+def write_hwp_change_log(changes, path, name_map=None):
     """보관용 변경기록 엑셀: 원래 값 / 바뀐 값 / 종류 / 적용 횟수.
 
     changes: [(원래, 바뀐, 종류, 적용횟수), ...]
     """
+    from adapters.excel_adapter import append_name_map_sheet
     wb = Workbook()
     ws = wb.active
     ws.title = "변경기록"
@@ -183,4 +212,5 @@ def write_hwp_change_log(changes, path):
         longest = max((len(str(c.value or "")) for c in ws[letter]), default=8)
         ws.column_dimensions[letter].width = min(max(longest + 3, 10), 60)
     ws.freeze_panes = "A2"
+    append_name_map_sheet(wb, name_map)
     wb.save(path)

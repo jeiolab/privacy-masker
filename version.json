@@ -1,6 +1,6 @@
 {
-  "version": "1.1.0",
-  "date": "2026-10-19",
-  "notes": "새 버전",
+  "version": "1.2.0",
+  "date": "2026-10-22",
+  "notes": "여러 파일 가명처리, [이름N] 복원, 워드/PPT 부가 글",
   "download": "https://github.com/jeiolab/privacy-masker/releases/latest"
 }

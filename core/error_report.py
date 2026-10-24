@@ -36,7 +36,7 @@ def mask_for_report(text):
         masked, _ = mask_text(raw, _dictionary())
         return masked
     except Exception:
-        return "(가명처리에 실패해 원문은 넣지 않았습니다)"
+        return "(개인정보를 가리지 못해 원문은 넣지 않았어요)"
 
 
 def windows_version():

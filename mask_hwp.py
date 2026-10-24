@@ -24,6 +24,7 @@ from adapters.hwp_adapter import (
     DUPLICATE_WARNING, HWP_EXTS, HWP_WINDOWS_ONLY_MSG, mask_hwp,
     write_hwp_change_log,
 )
+from adapters.hwpx_adapter import mask_hwpx
 from core import config
 from core.masker import load_dictionary, mask_text
 
@@ -55,8 +56,7 @@ def main(argv):
     if ext not in HWP_EXTS:
         print(f"[오류] 한글 파일이 아닙니다: {ext}  (지원: " + " ".join(sorted(HWP_EXTS)) + ")")
         return 1
-    # 한글(.hwp/.hwpx)은 한글이 설치된 Windows 에서만 처리할 수 있다
-    if sys.platform != "win32":
+    if ext == ".hwp" and sys.platform != "win32":
         print(HWP_WINDOWS_ONLY_MSG)
         return 1
 
@@ -82,7 +82,8 @@ def main(argv):
         return _ask_yes_no("계속할까요?")
 
     try:
-        result = mask_hwp(src, ai_path, dictionary, confirm_duplicate=confirm_duplicate)
+        mask_fn = mask_hwpx if ext == ".hwpx" else mask_hwp
+        result = mask_fn(src, ai_path, dictionary, confirm_duplicate=confirm_duplicate)
     except Exception as e:
         print(f"[오류] 한글 파일을 처리하지 못했습니다: {e}")
         return 1

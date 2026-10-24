@@ -91,25 +91,127 @@ def find_header_row(rows):
 
 def map_columns(header_row):
     """필드 -> 열 인덱스. 같은 필드가 여러 열이면 맨 왼쪽만 사용."""
-    mapping = {}
+    groups = map_column_groups(header_row)
+    return groups[0] if groups else {}
+
+
+def map_column_groups(header_row):
+    """한 줄에 반이 여러 개 붙어 있으면 학번/성명 묶음을 모두 찾는다.
+
+    예: 학번|성명|출신중| |학번|성명|출신중 → [{학번:0, 성명:1}, {학번:4, 성명:5}]
+    성명이 없는 묶음은 버린다.
+    """
+    groups, current = [], {}
     for idx, h in enumerate(header_row):
         field = classify_header(h)
-        if field and field not in mapping:
-            mapping[field] = idx
-    return mapping
+        if not field:
+            continue
+        if field in current:
+            if "성명" in current:
+                groups.append(current)
+            current = {}
+        current[field] = idx
+    if "성명" in current:
+        groups.append(current)
+    return groups
 
 
 def load_rows(path):
-    """원본을 읽기 전용으로 열어 (시트명, 행 목록) 반환."""
+    """원본을 읽기 전용으로 열어 (시트명, 행 목록) 반환. (첫 번째 유효 시트)"""
+    tables = load_roster_tables(path)
+    if not tables:
+        return None, None
+    return tables[0][0], tables[0][1]
+
+
+def load_roster_tables(path):
+    """머리글이 있는 모든 시트의 (시트명, 행 목록, 머리글 위치, 열 묶음 목록)을 모은다."""
     wb = load_workbook(path, read_only=True, data_only=True)
+    out = []
     try:
         for ws in wb.worksheets:
             rows = [list(r) for r in ws.iter_rows(values_only=True)]
-            if find_header_row(rows) is not None:
-                return ws.title, rows
+            header_idx = find_header_row(rows)
+            if header_idx is None:
+                continue
+            groups = map_column_groups(rows[header_idx])
+            if groups:
+                out.append((ws.title, rows, header_idx, groups))
     finally:
         wb.close()
-    return None, None
+    return out
+
+
+def union_mapping(groups):
+    """여러 열 묶음에 나타난 필드를 합친다. (쓰기/번호 부여용, 인덱스는 대표값)"""
+    mapping = {}
+    for g in groups:
+        for field, idx in g.items():
+            mapping.setdefault(field, idx)
+    return mapping
+
+
+def collect_students(path, warnings):
+    """모든 시트·가로로 붙은 반에서 학생을 모은다. (학생 목록, 합친 열 매핑).
+
+    성명 열이 아닌 칸(전출·전입·메모)에 있는 이름도 추가로 넣는다.
+    """
+    tables = load_roster_tables(path)
+    students = []
+    all_groups = []
+    if tables:
+        for sheet, rows, header_idx, groups in tables:
+            all_groups.extend(groups)
+            before = len(warnings)
+            for mapping in groups:
+                students.extend(build_students(rows, header_idx, mapping, warnings))
+            for i in range(before, len(warnings)):
+                warnings[i] = f"{sheet}: {warnings[i]}"
+    known = {s.get("성명", "") for s in students} | {s.get("보호자명", "") for s in students}
+    known.discard("")
+    loose = _collect_loose_names(path, known)
+    if loose:
+        start = len(students) + 1
+        for i, name in enumerate(loose, start=start):
+            students.append({
+                "행": 10_000 + i,
+                "학번": "",
+                "성명": name,
+                "보호자명": "",
+                "학생연락처": "",
+                "보호자연락처": "",
+                "주소": "",
+                "생년월일": "",
+                "성뺀이름": split_given_name(name),
+            })
+        warnings.append(f"이름 칸 밖에서 {len(loose)}명을 더 넣었어요")
+    if not students:
+        return None, None
+    mapping = union_mapping(all_groups) if all_groups else {"성명": 0}
+    return students, mapping
+
+
+def _collect_loose_names(path, known):
+    """머리글이 없는 칸까지 모두 읽어, 이미 모은 이름·보호자명을 뺀 사람 이름만 모은다."""
+    from core.names import iter_person_names
+
+    found = []
+    seen = set(known)
+    wb = load_workbook(path, read_only=True, data_only=True)
+    try:
+        for ws in wb.worksheets:
+            for row in ws.iter_rows(values_only=True):
+                for v in row:
+                    if v is None:
+                        continue
+                    for name in iter_person_names(cell_to_str(v)):
+                        if name in seen:
+                            continue
+                        seen.add(name)
+                        found.append(name)
+    finally:
+        wb.close()
+    return found
 
 
 # ---------------------------------------------------------------- 사전 만들기
@@ -126,7 +228,10 @@ def build_students(rows, header_idx, mapping, warnings):
             continue
         name = norm(get(row, "성명"))
         if not name:
-            warnings.append(f"{order}행: 성명이 비어 있어 건너뜀")
+            if get(row, "학번"):
+                warnings.append(f"{order}행: 이름이 비어 있어 건너뛰었어요")
+            continue
+        if "," in name or "，" in name:
             continue
         s = {
             "행": order,
@@ -144,7 +249,8 @@ def build_students(rows, header_idx, mapping, warnings):
                 if fixed:
                     s[f] = fixed
                 else:
-                    warnings.append(f"{name}: {f} '{s[f]}' 형식을 인식하지 못해 그대로 둠")
+                    label = "학생 연락처" if f == "학생연락처" else "보호자 연락처"
+                    warnings.append(f"{name}: {label} '{s[f]}' 모양을 몰라 그대로 두었어요")
         s["성뺀이름"] = split_given_name(name)
         students.append(s)
     return students
@@ -160,10 +266,10 @@ def assign_codes(students, mapping, warnings):
         students.sort(key=sort_key)
         ids = [s["학번"] for s in students if s["학번"]]
         for sid in sorted({i for i in ids if ids.count(i) > 1}):
-            warnings.append(f"학번 {sid} 이(가) 중복됨")
+            warnings.append(f"학번 {sid}, 두 번 나왔어요")
     else:
         students.sort(key=lambda s: s["행"])  # 학번이 없으면 파일 순서
-        warnings.append("학번 열이 없어 파일에 나온 순서대로 번호를 붙임")
+        warnings.append("학번 칸이 없어 파일에 나온 순서대로 번호를 붙였어요")
 
     width = max(3, len(str(len(students))))
     for n, s in enumerate(students, start=1):
@@ -198,12 +304,12 @@ def add_cautions(students, warnings):
     for name, group in by_name.items():
         if len(group) > 1:
             nums = ", ".join(f"{g['번호']}번({g['학번'] or '학번없음'})" for g in group)
-            warnings.append(f"동명이인: {name} × {len(group)}명 [{nums}]")
+            warnings.append(f"동명이인: {name} {len(group)}명 ({nums})")
     for s in students:
         if "외자 이름" in s["주의"]:
-            warnings.append(f"외자 이름: {s['성명']} → '{s['성뺀이름']}' ({s['번호']}번)")
+            warnings.append(f"한 글자 이름: {s['성명']} ({s['번호']}번)")
         if "일반 단어와 겹침" in s["주의"]:
-            warnings.append(f"일반 단어와 겹치는 이름: {s['성명']} → '{s['성뺀이름']}' ({s['번호']}번)")
+            warnings.append(f"평범한 단어와 같은 이름: {s['성명']} ({s['번호']}번)")
 
 
 # ---------------------------------------------------------------- 저장
@@ -393,7 +499,7 @@ def merge_students(old_students, new_students, mapping, warnings):
     """
     use_id = ("학번" in mapping) and any(s.get("학번") for s in old_students)
     if not use_id:
-        warnings.append("학번이 없어 성명으로 비교합니다(동명이인이 있으면 부정확할 수 있음).")
+        warnings.append("학번이 없어 이름으로 비교해요. 동명이인이 있으면 정확하지 않을 수 있어요.")
 
     def key_of(s):
         return s["학번"] if use_id and s.get("학번") else s.get("성명", "")
@@ -457,7 +563,7 @@ def apply_missing_notes(merged, warnings):
         if s.pop("_빠짐", False):
             note = "명렬표에 없음"
             s["주의"] = note if not s.get("주의") else f"{note}, {s['주의']}"
-            warnings.append(f"명렬표에 없음: {s['성명']} ({s['번호']}번) - 사전에 그대로 보관함")
+            warnings.append(f"명렬표에 없어요: {s['성명']} ({s['번호']}번). 명단에는 그대로 남겨 두었어요")
 
 
 def _num_key(s):
@@ -562,7 +668,7 @@ def merge_staff(old_staff, new_names, warnings):
             seen_new.add(name)
             uniq_names.append(name)
         elif name:
-            warnings.append(f"교직원 명단에 '{name}' 이(가) 여러 번 있어 한 번만 넣음")
+            warnings.append(f"'{name}' 이름이 교직원 명단에 여러 번 나와 한 번만 넣었어요")
     new_set = set(uniq_names)
 
     old_by_name = {}
@@ -585,7 +691,7 @@ def merge_staff(old_staff, new_names, warnings):
         else:
             s["주의"] = "명단에 없음"
             missing += 1
-            warnings.append(f"명단에 없음: {s.get('성명')} (교사{s.get('번호')}번) - 사전에 그대로 보관함")
+            warnings.append(f"명단에 없어요: {s.get('성명')} (교사{s.get('번호')}번). 명단에는 그대로 남겨 두었어요")
         merged.append(s)
 
     # 2) 새 교직원: 가장 큰 번호 다음 번호를 붙여 추가
@@ -639,18 +745,15 @@ def main(argv):
         print("[오류] 입력 파일이 결과 파일과 같습니다.")
         return 1
 
+    warnings = []
     try:
-        sheet, rows = load_rows(src)
+        new_students, mapping = collect_students(src, warnings)
     except Exception as e:  # 손상/비밀번호 파일 등
         print(f"[오류] 엑셀을 읽지 못했습니다: {e}")
         return 1
-    if rows is None:
+    if mapping is None:
         print(f"[오류] 위에서 {config.HEADER_SCAN_ROWS}줄 안에서 머리글 줄을 찾지 못했습니다.")
         return 1
-
-    header_idx = find_header_row(rows)
-    mapping = map_columns(rows[header_idx])
-    warnings = []
 
     found = [f for f in config.COLUMN_CANDIDATES if f in mapping]
     missing = [f for f in config.COLUMN_CANDIDATES if f not in mapping]
@@ -659,10 +762,7 @@ def main(argv):
         print("[오류] 성명 열을 찾지 못해 사전을 만들 수 없습니다.")
         print(f"  못 찾은 열: {', '.join(missing)}")
         return 1
-    for f in missing:
-        warnings.append(f"{f} 열을 찾지 못해 건너뜀")
-
-    new_students = build_students(rows, header_idx, mapping, warnings)
+    warnings = [f"{f} 열을 찾지 못해 건너뜀" for f in missing] + warnings
 
     existing = load_existing_dict(out_path)
     stats = backup = None
@@ -683,12 +783,11 @@ def main(argv):
         write_dict_incremental(students, out_path)
         mode = "사전 업데이트"
 
-    print(f"원본: {src} (시트 '{sheet}', 머리글 {header_idx + 1}행)")
+    print(f"원본: {src}")
     print(f"모드: {mode}")
     if backup is not None:
         print(f"백업: {backup}")
-    print("찾은 열  : " + ", ".join(
-        f"{f}('{cell_to_str(rows[header_idx][mapping[f]])}')" for f in found))
+    print("찾은 열  : " + ", ".join(found))
     print("못 찾은 열: " + (", ".join(missing) if missing else "없음"))
     print(f"총 학생 수: {len(students)}명")
     if stats is not None:
