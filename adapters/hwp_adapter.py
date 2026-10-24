@@ -86,7 +86,7 @@ def _dedupe_changes(raw_changes):
     return items
 
 
-def mask_hwp(src_path, dst_path, dictionary, confirm_duplicate=None, kinds=None):
+def mask_hwp(src_path, dst_path, dictionary, confirm_duplicate=None):
     """원본을 dst 로 복사한 뒤 복사본만 열어 서식 그대로 가명처리하고 저장한다.
 
     Args:
@@ -123,7 +123,7 @@ def mask_hwp(src_path, dst_path, dictionary, confirm_duplicate=None, kinds=None)
 
         # 2) 문서 전체 글자(표·머리말·꼬리말·메모 포함)를 꺼내 mask_text 로 변경 목록을 얻는다
         text = _collect_text(hwp)
-        _, raw_changes = mask_text(text, dictionary, kinds)
+        _, raw_changes = mask_text(text, dictionary)
         items = _dedupe_changes(raw_changes)
         duplicates = any(kind == "동명이인확인" for _, _, kind, _ in items)
 
@@ -148,7 +148,7 @@ def mask_hwp(src_path, dst_path, dictionary, confirm_duplicate=None, kinds=None)
 
         # 5) 저장 후 다시 열어서 글자를 꺼내 검사한다
         hwp.open(str(dst_path))
-        findings = check_text(_collect_text(hwp), dictionary, kinds)
+        findings = check_text(_collect_text(hwp), dictionary)
 
         return {"status": "done", "changes": items, "findings": findings, "duplicates": duplicates}
     finally:

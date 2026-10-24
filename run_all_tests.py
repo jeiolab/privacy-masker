@@ -152,104 +152,6 @@ def item1(dict_path, rows, hi, mapping, students, tmp):
     return PASS, [f"학생 30명 생성 · 추가 모드 요약 {stats} · 가로 반 배정표 {len(side_names)}명"]
 
 
-def _selective_kinds(d):
-    """고른 항목만 가리는지. 실패 문구에는 이름·번호·연락처를 넣지 않는다."""
-    bad = []
-    student = next((s for s in d.students if s.get("성명") and s.get("학번") and s.get("학생연락처")), None)
-    if student is None:
-        return ["항목 선택: 이름·학번·연락처가 있는 가짜 학생이 없음"]
-    name, sid, phone = student["성명"], student["학번"], student["학생연락처"]
-    email = "leave.me@example.com"
-    text = f"학생 {name} 학번 {sid} 연락 {phone} 메일 {email}"
-
-    only_some, _ = mask_text(text, d, kinds={"학번", "이메일"})
-    if name not in only_some:
-        bad.append("학번·이메일만 가리기: 학생 이름이 사라짐")
-    if phone not in only_some:
-        bad.append("학번·이메일만 가리기: 연락처가 바뀜")
-    if sid in only_some:
-        bad.append("학번·이메일만 가리기: 학번이 남음")
-    if email in only_some:
-        bad.append("학번·이메일만 가리기: 이메일이 남음")
-
-    only_name, _ = mask_text(text, d, kinds={"성명"})
-    if name in only_name:
-        bad.append("이름만 가리기: 학생 이름이 남음")
-    if sid not in only_name or email not in only_name or phone not in only_name:
-        bad.append("이름만 가리기: 학번·이메일·연락처 중 하나가 사라짐")
-
-    known, _ = mask_text(phone, d, kinds={"사전에없음"})
-    if phone not in known or "[전화번호]" in known:
-        bad.append("명단에 있는 연락처가 '다른 전화번호'로 바뀜")
-
-    unknown = "010-0000-0000"
-    kept, _ = mask_text(f"임시 {unknown}", d, kinds={"성명"})
-    if unknown not in kept or "[전화번호]" in kept:
-        bad.append("다른 전화번호를 끄면 모르는 번호도 가려짐")
-    hidden, _ = mask_text(f"임시 {unknown}", d, kinds={"사전에없음"})
-    if "[전화번호]" not in hidden or unknown in hidden:
-        bad.append("다른 전화번호를 켜면 모르는 번호가 안 가려짐")
-
-    if mask_text(text, d)[0] != mask_text(text, d, kinds=None)[0]:
-        bad.append("항목을 생략하면 전부 가리는 결과와 다름")
-    if mask_text(text, d, kinds=set())[0] != text:
-        bad.append("항목을 하나도 고르지 않았는데 글이 바뀜")
-
-    from core.masker import Dictionary
-    titled = Dictionary([{
-        "번호": "001", "학번": "계", "성명": "성별", "성뺀이름": "별",
-        "학생코드": "학생001", "S코드": "S001", "주의": "",
-    }])
-    for title in ("학번", "이름", "연락처", "성명", "성별", "관계", "전화번호", "이메일"):
-        kept_title, title_changes = mask_text(title, titled)
-        if kept_title != title or title_changes:
-            bad.append(f"제목 '{title}' 이 바뀜")
-    if "성별" in mask_text("상담 대상은 성별이다", titled)[0]:
-        bad.append("제목이 아닌 문장 속 이름이 남음")
-    if leftover_person_names("학번 이름 연락처 전화번호 이메일", d):
-        bad.append("제목을 사람 이름으로 봄")
-    if find_name_suspects("학번\n이름\n연락처\n전화번호\n이메일", d):
-        bad.append("제목을 확인할 이름으로 봄")
-    if titled.present_kinds("성별\n관계\n연락처"):
-        bad.append("제목만 있는 글에서 가릴 항목을 찾음")
-
-    if d.present_kinds(f"메일 {email} 만") != {"이메일"}:
-        bad.append("이메일만 있는 글에서 다른 항목을 찾음")
-    found_keys = d.present_kinds(f"{name}\n{sid}")
-    if "성명" not in found_keys or "학번" not in found_keys or "이메일" in found_keys:
-        bad.append(f"이름·학번 글의 항목이 기대와 다름: {sorted(found_keys)}")
-    import tempfile
-    from openpyxl import Workbook
-    import workflows
-    folder = Path(tempfile.mkdtemp())
-    try:
-        sheet = folder / "항목.xlsx"
-        book = Workbook()
-        book.active.append([sid, name])
-        book.save(sheet)
-        book.close()
-        mail = folder / "메일.txt"
-        mail.write_text(f"연락 {email}\n", encoding="utf-8")
-        xkeys, xerr = workflows.kinds_in_files([sheet], d)
-        mkeys, merr = workflows.kinds_in_files([mail], d)
-    finally:
-        shutil.rmtree(folder, ignore_errors=True)
-    if xerr or "학번" not in xkeys or "성명" not in xkeys:
-        bad.append(f"엑셀에서 찾은 항목이 기대와 다름: {sorted(xkeys)}")
-    if merr or mkeys != {"이메일"}:
-        bad.append(f"글 파일에서 찾은 항목이 기대와 다름: {sorted(mkeys)}")
-
-    scoped = check_text(only_name, d, kinds={"성명"})
-    if scoped:
-        bad.append(f"이름만 가린 글을 남은 개인정보 {len(scoped)}건으로 봄")
-    full = check_text(only_name, d)
-    if not any(f.kind == "학번" for f in full):
-        bad.append("전체 검사에서 남은 학번을 못 찾음")
-    if not any(f.kind == "전화번호" for f in full):
-        bad.append("전체 검사에서 남은 연락처를 못 찾음")
-    return bad
-
-
 # ---------------------------------------------------------------- 2) 치환 엔진
 def item2(d):
     cases = build_cases(d)
@@ -261,10 +163,9 @@ def item2(d):
         probs += [f"'{w}' {out.count(w)}개 (기대 {k}개)" for w, k in case["counts"] if out.count(w) != k]
         if probs:
             bad.append(f"[{case['title']}] " + " / ".join(probs) + f"\n      후: {out}")
-    bad += _selective_kinds(d)
     if bad:
         return FAIL, bad
-    return PASS, [f"문장 {len(cases)}개 모두 기대대로 치환됨 · 고른 항목만 가림"]
+    return PASS, [f"문장 {len(cases)}개 모두 기대대로 치환됨"]
 
 
 # ---------------------------------------------------------------- 3) 복원

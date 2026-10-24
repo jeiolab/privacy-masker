@@ -6,7 +6,6 @@
 - 되돌리기: 왼쪽에 AI 답변을 붙여 넣고, 오른쪽에서 복원 결과를 본다.
 - 어떤 오류가 나도 프로그램이 꺼지지 않고, 알림창으로 오류 내용을 보여 준다.
 """
-import base64
 import os
 import re
 import subprocess
@@ -20,8 +19,6 @@ from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 
 import workflows
-from core.config import program_dir
-from core.masker import MASK_OPTIONS
 from core.restorer import unmask_text
 from core.updater import fetch_update_info, is_newer, open_download_page, update_how_to
 from core.version import VERSION
@@ -33,10 +30,8 @@ except ImportError:   # tkinterdnd2 가 없으면 끌어다 놓기만 빠지고 
     HAS_DND = False
 
 APP_TITLE = "개인정보 가리개"
-WINDOW_SIZE = "1180x1140"
-MIN_SIZE = (1040, 1120)
-COPYRIGHT_NOTICE = "© 2026 능주고등학교 교사 JEIO"
-LOGO_BASELINE = 13                       # jeio_logo.png 안에서 E·I·O 글자 밑줄 위치
+WINDOW_SIZE = "1180x860"
+MIN_SIZE = (1040, 740)
 
 # 맥·윈도우·리눅스에서 한글이 잘 보이는 글꼴 후보 (앞에서부터 설치된 것을 쓴다)
 FONT_CANDIDATES = [
@@ -264,39 +259,6 @@ def dashed_round_rect(canvas, x1, y1, x2, y2, r, color, width=1.5, dash=(5, 4)):
     canvas.create_arc(x2 - 2 * r, y1, x2, y1 + 2 * r, start=0, extent=90, **akw)
     canvas.create_arc(x1, y2 - 2 * r, x1 + 2 * r, y2, start=180, extent=90, **akw)
     canvas.create_arc(x2 - 2 * r, y2 - 2 * r, x2, y2, start=270, extent=90, **akw)
-
-
-class Tick(tk.Canvas):
-    """18px 체크. 켜지면 초록 네모와 흰 체크, 꺼지면 흰 네모."""
-
-    def __init__(self, parent, variable, command=None, parent_bg=WHITE):
-        super().__init__(parent, width=18, height=18, bg=parent_bg, highlightthickness=0, bd=0)
-        self.var = variable
-        self.command = command
-        try:
-            self.configure(cursor=HAND_CURSOR)
-        except tk.TclError:
-            pass
-        self.bind("<Button-1>", self._toggle)
-        self._draw()
-
-    def set(self, value):
-        self.var.set(bool(value))
-        self._draw()
-        if self.command:
-            self.command()
-
-    def _toggle(self, _event):
-        self.set(not self.var.get())
-
-    def _draw(self):
-        self.delete("all")
-        if self.var.get():
-            round_rect(self, 0, 0, 18, 18, 4, fill=ACCENT)
-            self.create_line(4.2, 9.2, 7.4, 12.6, 13.6, 5.4, fill=WHITE, width=1.8,
-                             capstyle="round", joinstyle="round")
-        else:
-            round_rect(self, 0.5, 0.5, 17.5, 17.5, 4, fill=WHITE, outline="#CDD1D8")
 
 
 class Card(tk.Frame):
@@ -547,14 +509,11 @@ class App:
         self._dict_ok = False
         self.selected_path = None
         self.selected_paths = []
-        self._kind_vars = {}
-        self._kind_status = "hidden"
         self.result = None
         self._confirmed_names = []      # '이 단어도 가리기'로 고른 이름 단어 (순서 유지)
         self._ignored_names = set()     # '무시'한 이름 의심 단어
 
         self._build_top_bar()
-        self._build_copyright()
         self.content = tk.Frame(self.root, bg=MIST)
         self.content.pack(fill="both", expand=True, padx=28, pady=(20, 24))
         self.content.grid_rowconfigure(0, weight=1)
@@ -899,29 +858,6 @@ class App:
             side="right", padx=(0, 2))
         tk.Frame(bar, bg=HAIR, height=1).pack(fill="x")
 
-    def _build_copyright(self):
-        """맨 아래: JEIO 로고와 저작권 문구. 로고 글자 밑줄과 문구 밑줄을 맞춘다."""
-        foot = tk.Frame(self.root, bg=MIST)
-        foot.pack(side="bottom", fill="x", padx=32, pady=(0, 12))
-        font = self.f_small
-        ascent = font.metrics("ascent")
-        descent = font.metrics("descent")
-        logo_path = program_dir() / "assets" / "jeio_logo.png"
-        logo_w = logo_h = 0
-        if logo_path.is_file():
-            self._jeio_logo = tk.PhotoImage(data=base64.b64encode(logo_path.read_bytes()))
-            logo_w, logo_h = self._jeio_logo.width(), self._jeio_logo.height()
-        gap = 8 if logo_w else 0
-        baseline = max(ascent, LOGO_BASELINE)
-        canvas_h = max(baseline + descent, baseline - LOGO_BASELINE + logo_h, 1)
-        canvas_w = logo_w + gap + font.measure(COPYRIGHT_NOTICE) + 6
-        mark = tk.Canvas(foot, width=canvas_w, height=canvas_h, bg=MIST, highlightthickness=0, bd=0)
-        mark.pack(side="left")
-        if logo_w:
-            mark.create_image(0, baseline - LOGO_BASELINE, image=self._jeio_logo, anchor="nw")
-        mark.create_text(logo_w + gap, baseline + descent, text=COPYRIGHT_NOTICE, font=font,
-                         fill=SLATE, anchor="sw")
-
     def _step_title(self, parent, number, text, sub=None):
         """카드 제목: 단계 번호 동그라미 + 제목 (+ 오른쪽 작은 설명). (줄, 번호) 를 돌려준다."""
         row = tk.Frame(parent, bg=WHITE)
@@ -955,7 +891,7 @@ class App:
 
         # 점선 둥근 칸: 뒤에 캔버스로 테두리를 그리고 그 위에 안내를 얹는다
         self._drop_fill = DROP_BG
-        self.drop = tk.Frame(box, bg=WHITE, height=168)
+        self.drop = tk.Frame(box, bg=WHITE, height=190)
         self.drop.pack(fill="x", pady=(16, 12))
         self.drop.pack_propagate(False)
         self._drop_canvas = tk.Canvas(self.drop, bg=WHITE, highlightthickness=0, bd=0)
@@ -997,27 +933,6 @@ class App:
         self.mode_hint.pack(fill="x")
         self.mode_hint.bind("<Configure>", lambda e: self.mode_hint.configure(wraplength=max(60, e.width - 4)))
 
-        # 가릴 항목은 파일을 고르기 전에는 숨긴다. 고른 뒤에 그 파일에서 찾은 항목만 채운다.
-        self.kind_wrap = tk.Frame(box, bg=WHITE)
-        kind_head = tk.Frame(self.kind_wrap, bg=WHITE)
-        kind_head.pack(fill="x", pady=(0, 4))
-        tk.Label(kind_head, text="가릴 항목", font=self.f_small_bold, bg=WHITE, fg=INK).pack(side="left")
-        self.kind_toggle = tk.Label(kind_head, text="선택 해제", font=self.f_small, bg=WHITE, fg=SLATE,
-                                    cursor=HAND_CURSOR)
-        self.kind_toggle.pack(side="right")
-        self.kind_toggle.bind("<Button-1>", lambda _e: self._toggle_all_kinds())
-        self.kind_note = tk.Label(self.kind_wrap, text="이 파일에서 찾은 항목이에요. 체크를 끄면 글에 그대로 남아요.",
-                                  font=self.f_small, bg=WHITE, fg=SLATE, anchor="w", justify="left")
-        self.kind_note.pack(fill="x", pady=(0, 8))
-        self.kind_note.bind("<Configure>", lambda e: self.kind_note.configure(wraplength=max(60, e.width - 4)))
-        self.kind_empty = tk.Label(self.kind_wrap, text="", font=self.f_small, bg=WHITE, fg=SLATE,
-                                   anchor="w", justify="left")
-        self.kind_empty.bind("<Configure>", lambda e: self.kind_empty.configure(wraplength=max(60, e.width - 4)))
-        self.kind_grid = tk.Frame(self.kind_wrap, bg=WHITE)
-        self.kind_grid.grid_columnconfigure(0, weight=1)
-        self.kind_grid.grid_columnconfigure(1, weight=1)
-        self._kind_ticks = []
-
         run_row = tk.Frame(left, bg=MIST)
         run_row.pack(fill="x", pady=(16, 0))
         self.run_button = self.button(run_row, "3  가리기", self.run_mask, kind="primary", height=50,
@@ -1026,7 +941,10 @@ class App:
         self.run_hint = tk.Label(run_row, text="", font=self.f_small, bg=MIST, fg=SLATE, anchor="w",
                                  justify="left")
         self.run_hint.pack(fill="x", pady=(8, 0))
-        self.run_hint.bind("<Configure>", lambda e: self.run_hint.configure(wraplength=max(60, e.width - 4)))
+        # 폴더 통째로 가리기(1.3.0): 원본은 제자리, 가린 복사본은 NAS 의 90_가림본 에 같은 구조로
+        self.folder_button = self.button(run_row, "폴더 통째로 가리기 (90_가림본)", self.run_mask_folder, height=40,
+                                         parent_bg=MIST)
+        self.folder_button.pack(fill="x", pady=(10, 0))
 
         # ---- 오른쪽: 결과
         result_card = Card(right, expand=True)
@@ -1135,116 +1053,17 @@ class App:
         self._drop_icon.delete("all")
         draw_doc_icon(self._drop_icon, 24, 26, ACCENT if hot else SLATE, ACCENT)
 
-    def _selected_kinds(self):
-        """지금 목록에서 체크된 항목 키. 목록이 없으면 빈 목록."""
-        return [key for key, _ in MASK_OPTIONS if self._kind_vars.get(key) and self._kind_vars[key].get()]
-
-    def _kinds_for_mask(self):
-        """모두 켜져 있으면 전부 가린다. 일부를 끄면 체크된 것만 가린다."""
-        chosen = self._selected_kinds()
-        if chosen and len(chosen) == len(self._kind_vars):
-            return None
-        return frozenset(chosen)
-
-    def _clear_kind_list(self):
-        for child in self.kind_grid.winfo_children():
-            child.destroy()
-        self._kind_vars = {}
-        self._kind_ticks = []
-
-    def _fill_kind_grid(self, keys):
-        self._clear_kind_list()
-        labels = dict(MASK_OPTIONS)
-        for i, key in enumerate(keys):
-            var = tk.BooleanVar(value=True)
-            self._kind_vars[key] = var
-            cell = tk.Frame(self.kind_grid, bg=WHITE)
-            cell.grid(row=i // 2, column=i % 2, sticky="w", pady=2)
-            tick = Tick(cell, var, command=self._on_kind_change, parent_bg=WHITE)
-            self._kind_ticks.append(tick)
-            tick.pack(side="left")
-            name = tk.Label(cell, text=labels[key], font=self.f_small, bg=WHITE, fg=INK, cursor=HAND_CURSOR)
-            name.pack(side="left", padx=(6, 0))
-            name.bind("<Button-1>", lambda _e, t=tick: t.set(not t.var.get()))
-        self.kind_toggle.configure(text="선택 해제")
-
-    def _refresh_found_kinds(self):
-        """고른 파일에서 가릴 수 있는 항목만 목록으로 보여 준다. 파일이 없으면 목록을 숨긴다."""
-        paths = self._mask_paths()
-        self._clear_kind_list()
-        if not paths or not self._dict_ok:
-            self._kind_status = "hidden"
-            self.kind_wrap.pack_forget()
-            return
-        if not self.kind_wrap.winfo_ismapped():
-            self.kind_wrap.pack(fill="x", pady=(16, 0))
-        self.kind_note.pack_forget()
-        self.kind_grid.pack_forget()
-        self.kind_toggle.pack_forget()
-        self.kind_empty.configure(text="파일에서 가릴 항목을 찾고 있어요.")
-        self.kind_empty.pack(fill="x")
-        self.run_hint.configure(text="파일에서 가릴 항목을 찾고 있어요.")
-        self.root.update_idletasks()
-        try:
-            found, errors = workflows.kinds_in_files(paths)
-        except Exception as exc:
-            found, errors = set(), [str(exc)]
-        keys = [key for key, _ in MASK_OPTIONS if key in found]
-        if not keys:
-            self._kind_status = "error" if errors else "empty"
-            message = "파일을 읽지 못해서 가릴 항목을 못 찾았어요." if errors else "이 파일에서 가릴 항목을 찾지 못했어요."
-            self.kind_empty.configure(text=message)
-            return
-        self._kind_status = "ready"
-        self.kind_empty.pack_forget()
-        self.kind_toggle.pack(side="right")
-        self.kind_note.pack(fill="x", pady=(0, 8))
-        self.kind_grid.pack(fill="x")
-        self._fill_kind_grid(keys)
-
-    def _on_kind_change(self):
-        chosen = self._selected_kinds()
-        self.kind_toggle.configure(text="선택 해제" if chosen and len(chosen) == len(self._kind_vars) else "모두 선택")
-        self._update_run_hint()
-        self._mark_result_stale("가릴 항목을 바꿨어요. [가리기]를 다시 눌러 주세요.")
-
-    def _toggle_all_kinds(self):
-        if not self._kind_vars:
-            return
-        turn_on = len(self._selected_kinds()) != len(self._kind_vars)
-        for var in self._kind_vars.values():
-            var.set(turn_on)
-        self._redraw_kind_ticks()
-        self._on_kind_change()
-
-    def _redraw_kind_ticks(self):
-        for tick in self._kind_ticks:
-            tick._draw()
-
     def _update_run_hint(self):
         """[가리기] 아래 한 줄: 무엇이 빠져서 누를 수 없는지, 또는 지금 고른 것."""
-        paths = self._mask_paths()
-        kinds = self._selected_kinds()
-        off = [label for key, label in MASK_OPTIONS if key in self._kind_vars and not self._kind_vars[key].get()]
         if not self._dict_ok:
             text = "먼저 위쪽 [명단 넣기]로 학생 명렬표를 넣어 주세요."
-        elif not paths:
-            text = "파일을 고르면 그 안에 있는 가릴 항목이 나와요."
-        elif self._kind_status == "error":
-            text = "파일을 읽지 못해서 가릴 항목을 못 찾았어요."
-        elif not self._kind_vars:
-            text = "이 파일에서 가릴 항목을 찾지 못했어요."
-        elif not kinds:
-            text = "가릴 항목을 하나 이상 체크해 주세요."
-        elif off:
-            shown = ", ".join(off[:4])
-            more = f" 외 {len(off) - 4}개" if len(off) > 4 else ""
-            text = f"그대로 둘 항목: {shown}{more}. 원본 파일은 바뀌지 않아요."
+        elif not self._mask_paths():
+            text = "파일을 고르면 [가리기]를 누를 수 있어요."
         else:
             text = "가린 결과는 오른쪽에 나와요. 원본 파일은 바뀌지 않아요."
         self.run_hint.configure(text=text)
-        self.step_file.set(done=bool(paths))
-        self.step_mode.set(done=bool(paths) and bool(kinds))
+        self.step_file.set(done=bool(self._mask_paths()))
+        self.step_mode.set(done=bool(self._mask_paths()))
 
     def _enable_drop(self, widgets):
         for w in widgets:
@@ -1578,6 +1397,94 @@ class App:
         win.wait_window()
         return choice["value"]
 
+    # ------------------------------------------------------------ 폴더 통째로 가리기 (1.3.0)
+    def run_mask_folder(self):
+        import folder_mask
+        if getattr(self, "_folder_busy", False):        # 앞 작업이 끝나기 전에 또 누르면 결과·대응 기록이 섞인다 (강희 지적)
+            messagebox.showinfo(APP_TITLE, "앞의 폴더 가리기가 아직 끝나지 않았어요.")
+            return
+        src = filedialog.askdirectory(title="가릴 원본 폴더 고르기 (원본은 그대로 둡니다)")
+        if not src:
+            return
+        mask_root = None
+        try:
+            folder_mask.find_layout(src)
+        except ValueError:
+            messagebox.showinfo(APP_TITLE, "NAS 번호 폴더(00_~60_) 안이 아니에요.\n가린 복사본을 둘 폴더를 골라 주세요.")
+            mask_root = filedialog.askdirectory(title="가린 복사본을 둘 폴더 고르기")
+            if not mask_root:
+                return
+        dictionary = workflows.get_dictionary()
+        win = tk.Toplevel(self.root)
+        win.title("폴더 가리는 중")
+        win.configure(bg=WHITE)
+        win.transient(self.root)
+        tk.Label(win, text="폴더를 가리는 중이에요. 원본은 바꾸지 않아요.", font=self.f_body, bg=WHITE, fg=INK).pack(
+            padx=24, pady=(20, 10))
+        bar = ttk.Progressbar(win, length=360, mode="determinate")
+        bar.pack(padx=24)
+        count = tk.Label(win, text="", font=self.f_small, bg=WHITE, fg=SLATE)
+        count.pack(padx=24, pady=(6, 20))
+
+        def tick(i, n):
+            def ui():
+                bar.configure(maximum=max(n, 1), value=i)
+                count.configure(text=f"{i} / {n}")
+            try:
+                self.root.after(0, ui)
+            except tk.TclError:
+                pass
+
+        def work():
+            try:
+                res, err = folder_mask.mask_folder(src, mask_root, dictionary, progress=tick), None
+            except Exception as e:
+                res, err = None, e
+
+            def done():
+                self._folder_busy = False
+                win.destroy()
+                if res:
+                    self._show_folder_result(res)
+                else:
+                    messagebox.showerror(APP_TITLE, f"폴더를 가리지 못했어요.\n{err if isinstance(err, ValueError) else folder_mask._reason(err)}")   # 오류 글 그대로는 원본 경로가 섞일 수 있다
+            try:
+                self.root.after(0, done)
+            except tk.TclError:
+                self._folder_busy = False
+
+        self._folder_busy = True
+        win.protocol("WM_DELETE_WINDOW", lambda: None)        # 끝날 때까지 진행 창을 닫지 않는다
+        win.grab_set()                                          # 끝날 때까지 다른 단추(이 이름도 가리기 등)를 못 누르게 — 같은 중간 저장 자리를 쓴다 (강희 지적)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_folder_result(self, res):
+        """결과 표 — 가린 이름만 보인다(실명 없음)."""
+        win = tk.Toplevel(self.root)
+        win.title("폴더 가리기 결과")
+        win.configure(bg=WHITE)
+        win.geometry("760x480")
+        tk.Label(win, text=res.headline, font=self.f_bold, bg=WHITE, fg=INK, anchor="w", justify="left",
+                 wraplength=700).pack(fill="x", padx=20, pady=(18, 8))
+        frame = tk.Frame(win, bg=WHITE)
+        frame.pack(fill="both", expand=True, padx=20)
+        tree = ttk.Treeview(frame, columns=("상태", "파일", "내용"), show="headings", height=14)
+        for col, w in (("상태", 110), ("파일", 420), ("내용", 190)):
+            tree.heading(col, text=col)
+            tree.column(col, width=w, anchor="w")
+        order = {"못 가림": 0, "개인정보 남음": 1, "원본 없음": 2, "가림": 3, "건너뜀": 4}
+        for r in sorted(res.rows, key=lambda r: order.get(r.상태, 9)):
+            tree.insert("", "end", values=(r.상태, r.파일, r.내용))
+        sb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview, style="Slim.Vertical.TScrollbar")
+        tree.configure(yscrollcommand=sb.set)
+        tree.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        row = tk.Frame(win, bg=WHITE)
+        row.pack(fill="x", padx=20, pady=14)
+        PillButton(row, "가림본 폴더 열기", lambda: open_folder(res.가림본뿌리), self.f_btn, kind="primary",
+                   height=38, padx=18).pack(side="left")
+        PillButton(row, "닫기", win.destroy, self.f_btn, kind="outline", height=38, padx=18).pack(side="right")
+
     # ------------------------------------------------------------ 탭 1: 가리기
     def choose_mask_file(self):
         paths = filedialog.askopenfilenames(title="가릴 파일 선택", filetypes=MASK_FILETYPES)
@@ -1619,12 +1526,8 @@ class App:
             self.mode_var.set("md")
             self.mode_seg.set_enabled("xlsx", False)
             self.mode_hint.configure(text="이 파일은 글(md)로만 저장돼요. 엑셀·한글만 원래 형식을 유지해요.")
-        self._refresh_found_kinds()
         self._update_run_hint()
         self._mark_result_stale("새 파일을 골랐어요. [가리기]를 눌러 주세요.")
-
-    def _mask_paths(self):
-        return list(self.selected_paths) or ([self.selected_path] if self.selected_path else [])
 
     def _mark_result_stale(self, message):
         """이전 결과가 새 파일/새 사전과 맞지 않으니, 복사 버튼을 잠그고 안내만 보여 준다."""
@@ -1636,19 +1539,16 @@ class App:
         self.suspect_wrap.grid_remove()
         self.set_status(message, "neutral")
 
+    def _mask_paths(self):
+        return list(self.selected_paths) or ([self.selected_path] if self.selected_path else [])
+
     def run_mask(self):
+        if getattr(self, "_folder_busy", False):        # 폴더 가리기와 같은 중간 저장 자리를 쓴다 — 끝난 뒤에 (강희 지적)
+            messagebox.showinfo(APP_TITLE, "폴더 가리기가 끝난 뒤에 눌러 주세요.")
+            return
         paths = self._mask_paths()
         if not paths:
             messagebox.showinfo(APP_TITLE, "먼저 가릴 파일을 고르세요.")
-            return
-        if not self._kind_vars:
-            message = ("파일을 읽지 못해서 가릴 항목을 못 찾았어요."
-                       if self._kind_status == "error" else "이 파일에서 가릴 항목을 찾지 못했어요.")
-            messagebox.showinfo(APP_TITLE, message)
-            return
-        kinds = self._kinds_for_mask()
-        if not kinds and kinds is not None:
-            messagebox.showinfo(APP_TITLE, "가릴 항목을 하나 이상 체크해 주세요.")
             return
         dictionary = workflows.get_dictionary()
         self._confirmed_names = []
@@ -1657,7 +1557,7 @@ class App:
         self.open_result_button.state(["disabled"])
         self._show_mask_loading()
         try:
-            result = workflows.mask_files(paths, self.mode_var.get(), dictionary, kinds=kinds)
+            result = workflows.mask_files(paths, self.mode_var.get(), dictionary)
         except Exception:
             self.result = None
             self.open_result_button.state(["disabled"])
@@ -1735,8 +1635,7 @@ class App:
         if not (r.ok and r.clean):
             lines = [(head_text, "bad")]                      # 위험(빨강) 한 줄
         else:
-            tone = "warn" if "그대로 둔 항목" in head_text else "ok"
-            lines = [(head_text, tone)]
+            lines = [(head_text, "ok")]                       # "남은 개인정보 없음" 초록 줄
             if n:
                 extra = f" · 확인 필요 {len(r.review)}건" if r.review else ""
                 lines.append((f"⚠ 확인할 이름 {n}건 - 아래에서 가릴지 정해 주세요{extra}", "warn"))
@@ -1798,8 +1697,7 @@ class App:
         self._show_mask_loading(again=True)
         try:
             result = workflows.mask_files(paths, self.mode_var.get(),
-                                          workflows.get_dictionary(), extra_names=self._confirmed_names,
-                                          kinds=self._kinds_for_mask())
+                                          workflows.get_dictionary(), extra_names=self._confirmed_names)
         finally:
             self._hide_mask_loading()
         self.show_mask_result(result)

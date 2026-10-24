@@ -14,7 +14,7 @@ from openpyxl import Workbook, load_workbook
 import build_dict
 from adapters.excel_adapter import (
     Change, apply_extra_names_workbook, load_name_map, mask_workbook, restore_workbook,
-    safe_filename, workbook_plain_text, write_change_log,
+    safe_filename, write_change_log,
 )
 from adapters.hwp_adapter import write_hwp_change_log
 from adapters.md_adapter import (
@@ -27,7 +27,7 @@ from core.checker import add_ignored_word as _add_ignored_word
 from core.checker import check_file, check_md_file, check_text, find_name_suspects
 from core.checker import load_ignored_words as _load_ignored_words
 from core.checker import remove_ignored_words as _remove_ignored_words
-from core.masker import MASK_OPTIONS, kind_enabled, load_dictionary, mask_text
+from core.masker import load_dictionary, mask_text
 from core.restorer import unmask_text
 
 BASE_DIR = config.user_data_dir()   # 문서\개인정보가리개_데이터 (경로는 config 한 곳)
@@ -276,48 +276,10 @@ class MaskResult:
         return self.ok and self.clean
 
 
-def _source_text(path):
-    """가릴 항목을 찾기 위해, 가리기가 읽는 것과 같은 글을 뽑는다."""
-    path = Path(path)
-    ext = path.suffix.lower()
-    if ext == ".xlsx":
-        return workbook_plain_text(path)
-    if ext == ".xls":
-        with tempfile.TemporaryDirectory() as tmp:
-            return workbook_plain_text(convert_xls_to_xlsx(path, tmp))
-    if ext == ".hwpx":
-        from adapters.hwpx_adapter import hwpx_text
-        return hwpx_text(path)
-    text = to_markdown(path)
-    if ext == ".csv":
-        text, _ = prepare_excel_markdown(text)
-    return text
-
-
-def kinds_in_files(paths, dictionary=None):
-    """파일들에서 실제로 찾은 가릴 항목 키와, 읽지 못한 파일 안내.
-
-    파일 이름도 함께 본다. 글에 없는 항목은 빠진다.
-    """
-    dictionary = dictionary or get_dictionary()
-    found, errors = set(), []
-    for path in paths:
-        path = Path(path)
-        try:
-            text = _source_text(path)
-        except Exception as exc:
-            errors.append(f"{path.name}: {exc}")
-            continue
-        found |= dictionary.present_kinds(text)
-        found |= dictionary.present_kinds(path.stem)
-    return found, errors
-
-
-def mask_file(path, mode, dictionary, extra_names=(), kinds=None):
+def mask_file(path, mode, dictionary, extra_names=()):
     """mode: 'md'(AI용 md) 또는 'xlsx'(엑셀·한글 원본 형식 유지).
 
     extra_names: 사용자가 '이 단어도 가리기'로 고른 이름 단어 목록. [이름N] 으로 추가 치환한다.
-    kinds: 가릴 항목 키. None이면 전부.
     """
     src = Path(path)
     ext = src.suffix.lower()
@@ -327,23 +289,23 @@ def mask_file(path, mode, dictionary, extra_names=(), kinds=None):
         with tempfile.TemporaryDirectory() as tmp:     # 변환본은 임시로만 쓰고 바로 지움
             converted = convert_xls_to_xlsx(src, tmp)
             if mode == "xlsx":
-                return _mask_to_excel(converted, dictionary, extra_names, kinds)
-            return _mask_to_md(converted, dictionary, extra_names, kinds)
+                return _mask_to_excel(converted, dictionary, extra_names)
+            return _mask_to_md(converted, dictionary, extra_names)
     if mode == "xlsx":
         if ext == ".xlsx":
-            return _mask_to_excel(src, dictionary, extra_names, kinds)
+            return _mask_to_excel(src, dictionary, extra_names)
         if ext in HWP_EXTS:
-            return _mask_to_hwp(src, dictionary, extra_names, kinds)
+            return _mask_to_hwp(src, dictionary, extra_names)
         raise ValueError("‘원래 형식’은 엑셀(.xlsx)과 한글(.hwp, .hwpx)만 쓸 수 있어요.")
-    return _mask_to_md(src, dictionary, extra_names, kinds)
+    return _mask_to_md(src, dictionary, extra_names)
 
 
-def mask_files(paths, mode, dictionary, extra_names=(), kinds=None):
+def mask_files(paths, mode, dictionary, extra_names=()):
     """여러 파일을 순서대로 가명처리하고 결과를 하나로 합친다."""
     results, errors = [], []
     for path in paths:
         try:
-            results.append(mask_file(path, mode, dictionary, extra_names, kinds))
+            results.append(mask_file(path, mode, dictionary, extra_names))
         except Exception as e:
             errors.append((Path(path), str(e)))
     if not results:
@@ -389,26 +351,18 @@ def _combine_mask_results(results, errors=()):
     )
 
 
-def _staff_notice(dictionary, kinds=None):
-    if not kind_enabled(kinds, "교직원"):
-        return []
+def _staff_notice(dictionary):
     if dictionary is not None and not getattr(dictionary, "staff", None):
         return [("안내", "", "교직원 명단이 없어요. 선생님 이름이 남을 수 있어요")]
     return []
 
 
-def _extra_words(text, dictionary, extra_names, kinds):
-    """명단 밖 이름은 '학생 이름'을 가릴 때만 자동으로 찾는다. 사용자가 고른 단어는 항상 넣는다."""
-    found = leftover_person_names(text, dictionary) if kind_enabled(kinds, "성명") else []
-    return list(dict.fromkeys(w for w in list(found) + list(extra_names) if w))
-
-
-def _masked_stem(src, dictionary, kinds=None):
-    stem, name_changes = mask_text(src.stem, dictionary, kinds)
+def _masked_stem(src, dictionary):
+    stem, name_changes = mask_text(src.stem, dictionary)
     return safe_filename(stem), name_changes
 
 
-def _mask_to_md(src, dictionary, extra_names=(), kinds=None):
+def _mask_to_md(src, dictionary, extra_names=()):
     ext = src.suffix.lower()
     if ext == ".pdf":
         scanned = find_scanned_pages(src)
@@ -422,16 +376,17 @@ def _mask_to_md(src, dictionary, extra_names=(), kinds=None):
     added_zero = frozenset()
     if ext in (".xlsx", ".csv"):
         text, added_zero = prepare_excel_markdown(text)
-    masked, changes = mask_markdown(text, dictionary, added_zero, kinds)
+    masked, changes = mask_markdown(text, dictionary, added_zero)
 
     # 사전에 없어도 칸·글에 남은 사람 이름 + 사용자가 고른 단어를 [이름N] 으로 바꾼다
     name_map = {}
-    extra_words = _extra_words(masked, dictionary, extra_names, kinds)
+    extra_words = leftover_person_names(masked, dictionary) + list(extra_names)
+    extra_words = list(dict.fromkeys(w for w in extra_words if w))
     if extra_words:
         masked, extra_changes, name_map = apply_extra_names(masked, extra_words)
         changes += extra_changes
 
-    stem, name_changes = _masked_stem(src, dictionary, kinds)
+    stem, name_changes = _masked_stem(src, dictionary)
     changes = [["(파일 이름)", o, n, k] for o, n, k, _ in name_changes] + changes
     ai_path, keep_path = AI_DIR / f"{stem}_가명.md", KEEP_DIR / f"{stem}_변경기록.xlsx"
     if src.resolve() in (ai_path.resolve(), keep_path.resolve()):
@@ -441,50 +396,51 @@ def _mask_to_md(src, dictionary, extra_names=(), kinds=None):
     ai_path.write_text(masked, encoding="utf-8")
     write_md_change_log(changes, keep_path, name_map)
 
-    findings = [(f.location, f.kind, f.value) for f in check_md_file(ai_path, dictionary, kinds)]
+    findings = [(f.location, f.kind, f.value) for f in check_md_file(ai_path, dictionary)]
     review = [
         (kind, line if isinstance(line, str) else f"{line}번째 줄", f"{o} → {n}")
         for line, o, n, kind in changes if kind in SPECIAL_KINDS
     ]
     suspects = find_name_suspects(masked, dictionary)
     return _finish(ai_path, keep_path, masked, len(changes), review, findings, suspects, name_map,
-                   dictionary, kinds)
+                   dictionary)
 
 
-def _mask_to_excel(src, dictionary, extra_names=(), kinds=None):
-    stem, name_changes = _masked_stem(src, dictionary, kinds)
+def _mask_to_excel(src, dictionary, extra_names=()):
+    stem, name_changes = _masked_stem(src, dictionary)
     ai_path, keep_path = AI_DIR / f"{stem}_가명.xlsx", KEEP_DIR / f"{stem}_변경기록.xlsx"
     if src.resolve() in (ai_path.resolve(), keep_path.resolve()):
         raise ValueError("고른 파일이 결과 파일과 같아요. 다른 파일을 골라 주세요.")
     AI_DIR.mkdir(parents=True, exist_ok=True)
     KEEP_DIR.mkdir(parents=True, exist_ok=True)
 
-    changes, warnings = mask_workbook(src, ai_path, dictionary, kinds)
+    changes, warnings = mask_workbook(src, ai_path, dictionary)
     changes = [Change("(파일 이름)", "", "-", o, n, k) for o, n, k, _ in name_changes] + changes
 
     text = workbook_text(ai_path)
-    extra_words = _extra_words(text, dictionary, extra_names, kinds)
+    extra_words = leftover_person_names(text, dictionary) + list(extra_names)
+    extra_words = list(dict.fromkeys(w for w in extra_words if w))
     name_map = {}
     if extra_words:
         extra_changes, name_map = apply_extra_names_workbook(ai_path, extra_words)
         changes += extra_changes
         text = workbook_text(ai_path)
     write_change_log(changes, keep_path, name_map)
-    findings = [(f"{f.sheet} / {f.location}", f.kind, f.value) for f in check_file(ai_path, dictionary, kinds)]
+    findings = [(f"{f.sheet} / {f.location}", f.kind, f.value) for f in check_file(ai_path, dictionary)]
     review = [(c.kind, f"{c.sheet} / {c.cell}", f"{c.original} → {c.new}") for c in changes if c.kind in SPECIAL_KINDS]
     review += [("경고", "", w) for w in warnings]
     suspects = find_name_suspects(text, dictionary)
     return _finish(ai_path, keep_path, text, len(changes), review, findings, suspects, name_map,
-                   dictionary, kinds)
+                   dictionary)
 
 
-def _mask_to_hwp(src, dictionary, extra_names=(), kinds=None):
+def _mask_to_hwp(src, dictionary, extra_names=()):
     """한글 원본 형식을 유지한 채 가명처리한다. .hwpx 는 한컴 없이, .hwp 는 한글 설치 필요."""
     from adapters.hwp_adapter import apply_extra_names_hwp, mask_hwp
     from adapters.hwpx_adapter import apply_extra_names_hwpx, hwpx_text, hwpx_to_markdown, mask_hwpx
 
     ext = src.suffix.lower()
-    stem, name_changes = _masked_stem(src, dictionary, kinds)
+    stem, name_changes = _masked_stem(src, dictionary)
     ai_path, keep_path = AI_DIR / f"{stem}_가명{ext}", KEEP_DIR / f"{stem}_변경기록.xlsx"
     if src.resolve() in (ai_path.resolve(), keep_path.resolve()):
         raise ValueError("고른 파일이 결과 파일과 같아요. 다른 파일을 골라 주세요.")
@@ -492,9 +448,9 @@ def _mask_to_hwp(src, dictionary, extra_names=(), kinds=None):
     KEEP_DIR.mkdir(parents=True, exist_ok=True)
 
     if ext == ".hwpx":
-        result = mask_hwpx(src, ai_path, dictionary, kinds=kinds)
+        result = mask_hwpx(src, ai_path, dictionary)
     else:
-        result = mask_hwp(src, ai_path, dictionary, kinds=kinds)
+        result = mask_hwp(src, ai_path, dictionary)
     if result["status"] == "aborted":
         raise ValueError("동명이인이 있어 원래 형식으로는 가릴 수 없어요. ‘AI에 올릴 글’을 이용해 주세요.")
 
@@ -507,7 +463,8 @@ def _mask_to_hwp(src, dictionary, extra_names=(), kinds=None):
             preview = to_markdown(ai_path)
         except Exception:
             preview = ""
-    extra_words = _extra_words(preview, dictionary, extra_names, kinds)
+    extra_words = leftover_person_names(preview, dictionary) + list(extra_names)
+    extra_words = list(dict.fromkeys(w for w in extra_words if w))
     name_map = {}
     if extra_words:
         extra_fn = apply_extra_names_hwpx if ext == ".hwpx" else apply_extra_names_hwp
@@ -518,7 +475,7 @@ def _mask_to_hwp(src, dictionary, extra_names=(), kinds=None):
 
     if ext == ".hwpx":
         text = hwpx_to_markdown(ai_path)
-        findings = [(f.location, f.kind, f.value) for f in check_text(hwpx_text(ai_path), dictionary, kinds)]
+        findings = [(f.location, f.kind, f.value) for f in check_text(hwpx_text(ai_path), dictionary)]
     else:
         findings = [(f.location, f.kind, f.value) for f in result.get("findings", [])]
         try:
@@ -534,18 +491,15 @@ def _mask_to_hwp(src, dictionary, extra_names=(), kinds=None):
         review.append(("동명이인", "문서", "같은 이름이 있어 ‘원래 형식’은 정확하지 않을 수 있어요"))
     suspects = find_name_suspects(text, dictionary)
     return _finish(ai_path, keep_path, text, len(items), review, findings, suspects, name_map,
-                   dictionary, kinds)
+                   dictionary)
 
 
 def _finish(ai_path, keep_path, text, total, review, findings, suspects=(), name_map=None,
-            dictionary=None, kinds=None):
-    review = list(review) + _staff_notice(dictionary, kinds)
+            dictionary=None):
+    review = list(review) + _staff_notice(dictionary)
     saved = f"저장: {ai_path.relative_to(BASE_DIR)}"
-    kept = [label for key, label in MASK_OPTIONS if not kind_enabled(kinds, key)]
     if findings:
         headline = f"⚠ 개인정보가 {len(findings)}건 남았어요. AI에 올리지 마세요 ({saved})"
-    elif kept:
-        headline = f"✅ 고른 항목은 가렸어요. 그대로 둔 항목이 글에 있어요  ({saved})"
     else:
         headline = f"✅ 남은 개인정보가 없어요  ({saved})"
     return MaskResult(ok=True, clean=not findings, headline=headline, text=text, ai_path=ai_path,
@@ -591,6 +545,9 @@ def find_keep_log(src):
     stem = src.stem
     if stem.endswith("_가명"):
         stem = stem[:-3]
+    from folder_mask import is_folder_output, keep_log_for   # 폴더 가리기(90_가림본)로 만든 파일은 원본 쪽 _가림기록/ 에 짝이 있다 (1.3.0)
+    if is_folder_output(src):               # 폴더 가리기 결과면 그 짝만 쓴다 — 없으면 다른 작업의 같은 이름 기록을 쓰지 않고 None (강희 지적)
+        return keep_log_for(src)
     for p in (KEEP_DIR / f"{stem}_변경기록.xlsx", src.parent / f"{stem}_변경기록.xlsx"):
         if p.exists():
             return p

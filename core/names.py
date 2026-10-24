@@ -40,7 +40,7 @@ def looks_like_person_name(word):
     word = normalize_name_token(word)
     if not _HANGUL_ONLY.match(word) or not (2 <= len(word) <= 4):
         return False
-    if word in _SKIP_LABELS or word in config.NAME_SUSPECT_EXCEPTIONS or config.is_field_title(word):
+    if word in _SKIP_LABELS or word in config.NAME_SUSPECT_EXCEPTIONS:
         return False
     if word in config.COMMON_WORD_NAMES:
         return False
