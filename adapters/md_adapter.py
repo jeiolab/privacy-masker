@@ -304,9 +304,9 @@ def prepare_excel_markdown(text):
     return "".join(pieces), added
 
 
-def mask_markdown(text, dictionary, added_zero=frozenset()):
+def mask_markdown(text, dictionary, added_zero=frozenset(), kinds=None):
     """md 글을 가명처리한다. (가명처리된 글, 변경 목록 [[줄, 원래 값, 바뀐 값, 종류], ...])."""
-    masked, ch = mask_text(text, dictionary)
+    masked, ch = mask_text(text, dictionary, kinds)
     changes = []
     for original, new, kind, pos in ch:
         if pos in added_zero:   # 우리가 붙인 0은 원래 값에서 뺀다

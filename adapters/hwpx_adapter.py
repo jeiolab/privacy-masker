@@ -194,11 +194,11 @@ def hwpx_text(path):
     return "\n".join(chunks)
 
 
-def mask_hwpx(src_path, dst_path, dictionary, confirm_duplicate=None):
+def mask_hwpx(src_path, dst_path, dictionary, confirm_duplicate=None, kinds=None):
     """원본 .hwpx 를 읽어 서식 그대로 가명처리한 뒤 dst 에 저장한다."""
     src_path, dst_path = Path(src_path), Path(dst_path)
     text = hwpx_text(src_path)
-    _, raw_changes = mask_text(text, dictionary)
+    _, raw_changes = mask_text(text, dictionary, kinds)
     items = _dedupe_changes(raw_changes)
     duplicates = any(kind == "동명이인확인" for _, _, kind, _ in items)
     if duplicates and confirm_duplicate is not None and not confirm_duplicate():
@@ -219,7 +219,7 @@ def mask_hwpx(src_path, dst_path, dictionary, confirm_duplicate=None):
             ).encode("utf-8")
 
     _rewrite_zip(src_path, dst_path, updates)
-    findings = check_text(hwpx_text(dst_path), dictionary)
+    findings = check_text(hwpx_text(dst_path), dictionary, kinds)
     return {"status": "done", "changes": items, "findings": findings, "duplicates": duplicates}
 
 

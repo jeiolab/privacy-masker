@@ -6,6 +6,7 @@
 - 사전 구조가 바뀌어도 예전 사전은 읽을 수 있어야 한다 (사전형식버전 참고).
 """
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -186,6 +187,21 @@ COLUMN_CANDIDATES = {
 
 # 열 이름에 이 단어가 들어간 연락처는 보호자연락처로 구분
 GUARDIAN_KEYWORDS = ["보호자", "학부모", "부모"]
+
+# 표의 제목으로만 쓰이는 말. 사람 이름이 아니므로 가리지 않는다.
+_FIELD_TITLE_EXTRA = [
+    "번호", "순번", "성별", "관계", "반", "학급", "학년", "비고", "담임",
+    "구분", "일시", "날짜", "내용", "출결", "혈액형", "이메일", "주민번호",
+    "출석번호", "특이사항", "출신중", "점수", "합계", "평균", "전화번호",
+    "국어", "수학", "영어",
+]
+FIELD_TITLES = {re.sub(r"\s+", "", w) for words in COLUMN_CANDIDATES.values() for w in words}
+FIELD_TITLES.update(_FIELD_TITLE_EXTRA)
+
+
+def is_field_title(text):
+    """칸 전체가 학번·이름·연락처 같은 제목이면 True."""
+    return re.sub(r"\s+", "", str(text or "")) in FIELD_TITLES
 
 # 머리글 줄 찾기: 위에서 N줄 안에서 후보 단어가 M개 이상 든 줄
 HEADER_SCAN_ROWS = 10

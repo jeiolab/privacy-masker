@@ -150,6 +150,8 @@ def find_name_suspects(text, dictionary, ignore=(), ignore_path=None):
             word = m.group("word")
             if _is_exception(word, exceptions) or word in dict_names or word in ignore or word in seen:
                 continue
+            if config.is_field_title(word):
+                continue
             if word[1:] in particles:   # 성씨 한 글자 뒤가 조사·시간 표현뿐 → 이름 아님
                 continue
             seen.add(word)
@@ -164,16 +166,25 @@ def _alt(keys):
     return "|".join(re.escape(k) for k in sorted(keys, key=lambda k: (-len(k), k)))
 
 
-def _build_patterns(dictionary):
+def _on(kinds, key):
+    return kinds is None or key in kinds
+
+
+def _build_patterns(dictionary, kinds=None):
     names, guardians, ids, phones = set(), set(), set(), set()
     for s in dictionary.students:
-        if len(s.get("성명", "")) >= 2:
+        if _on(kinds, "성명") and len(s.get("성명", "")) >= 2:
             names.add(s["성명"])
-        if len(s.get("보호자명", "")) >= 2:
+        if _on(kinds, "보호자명") and len(s.get("보호자명", "")) >= 2:
             guardians.add(s["보호자명"])
-        if s.get("학번"):
+        if _on(kinds, "학번") and s.get("학번"):
             ids.add(s["학번"])
-        for f in ("학생연락처", "보호자연락처"):
+        phone_fields = []
+        if _on(kinds, "학생전화"):
+            phone_fields.append("학생연락처")
+        if _on(kinds, "보호자전화"):
+            phone_fields.append("보호자연락처")
+        for f in phone_fields:
             d = re.sub(r"\D", "", s.get(f, ""))
             if len(d) >= 9:
                 phones.add(d)
@@ -216,9 +227,12 @@ def _as_text(value):
     return str(value)
 
 
-def check_file(path, dictionary):
-    """결과 엑셀을 다시 읽어 남은 개인정보 목록(Finding)을 돌려준다."""
-    p = _build_patterns(dictionary)
+def check_file(path, dictionary, kinds=None):
+    """결과 엑셀을 다시 읽어 남은 개인정보 목록(Finding)을 돌려준다.
+
+    kinds를 주면 일부러 남긴 항목은 남은 개인정보로 세지 않는다.
+    """
+    p = _build_patterns(dictionary, kinds)
     wb = load_workbook(path)
     findings = []
 
@@ -237,9 +251,9 @@ def check_file(path, dictionary):
     return findings
 
 
-def check_text(text, dictionary):
+def check_text(text, dictionary, kinds=None):
     """글 전체(여러 줄)에서 남은 개인정보를 찾는다. 위치는 'N번째 줄'."""
-    p = _build_patterns(dictionary)
+    p = _build_patterns(dictionary, kinds)
     findings = []
     for n, line in enumerate(text.splitlines(), start=1):
         for kind, word in _scan(line, p):
@@ -247,7 +261,7 @@ def check_text(text, dictionary):
     return findings
 
 
-def check_md_file(path, dictionary):
+def check_md_file(path, dictionary, kinds=None):
     """결과 md(텍스트) 파일을 다시 읽어서 남은 개인정보를 찾는다."""
     with open(path, encoding="utf-8") as f:
-        return check_text(f.read(), dictionary)
+        return check_text(f.read(), dictionary, kinds)

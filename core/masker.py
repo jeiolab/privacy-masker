@@ -41,6 +41,54 @@ _BIRTH = r"(?<!\d)(?P<by>\d{4})(?P<bs>[-./]?)(?P<bm>\d{2})(?P=bs)(?P<bd>\d{2})(?
 
 _NAME_KINDS = {"성명", "보호자명", "성뺀이름", "교직원"}
 
+# 화면에서 고르는 항목. (엔진 키, 보이는 이름). 성 뺀 이름은 '학생 이름'에 포함된다.
+MASK_OPTIONS = (
+    ("성명", "학생 이름"),
+    ("학번", "학번"),
+    ("학생전화", "학생 연락처"),
+    ("보호자명", "보호자 이름"),
+    ("보호자전화", "보호자 연락처"),
+    ("주소", "주소"),
+    ("생년월일", "생년월일"),
+    ("교직원", "교직원"),
+    ("이메일", "이메일"),
+    ("주민번호", "주민번호"),
+    ("사전에없음", "다른 전화번호"),
+)
+_KIND_OPTION = {
+    "성명": "성명",
+    "성뺀이름": "성명",
+    "보호자명": "보호자명",
+    "학번": "학번",
+    "학생전화": "학생전화",
+    "보호자전화": "보호자전화",
+    "주소": "주소",
+    "생년월일": "생년월일",
+    "교직원": "교직원",
+    "이메일": "이메일",
+    "주민번호": "주민번호",
+    "사전에없음": "사전에없음",
+}
+
+
+def kind_enabled(kinds, key):
+    """kinds가 None이면 모든 항목을 가린다. 아니면 고른 키만."""
+    return kinds is None or key in kinds
+
+
+def _hangul_span(text, start, end):
+    """맞춰진 구간을 붙여 쓴 한글 단어까지 넓힌다. '연락처' 안의 짧은 일치도 제목으로 보게."""
+    while start > 0 and "가" <= text[start - 1] <= "힣":
+        start -= 1
+    n = len(text)
+    while end < n and "가" <= text[end] <= "힣":
+        end += 1
+    return text[start:end]
+
+
+def _is_title_span(text, start, end):
+    return config.is_field_title(_hangul_span(text, start, end))
+
 # 교직원 이름 뒤에 붙는 호칭 (이 호칭이 붙으면 '성 뺀 이름'도 바꾼다)
 _TEACHER_TITLE = r"(?:선생님|선생|쌤|샘)"
 
@@ -172,37 +220,59 @@ class Dictionary:
         kind = "동명이인확인" if all(e.kind in _NAME_KINDS for e in cands) else "중복확인"
         return self._combine(cands), kind
 
+    def _keep(self, entries, kinds):
+        """고른 항목에 해당하는 후보만. kinds가 None이면 전부."""
+        if not entries:
+            return []
+        if kinds is None:
+            return list(entries)
+        return [e for e in entries if kind_enabled(kinds, _KIND_OPTION.get(e.kind, e.kind))]
+
     # ------------------------------------------------------------ 치환
-    def mask(self, text):
+    def mask(self, text, kinds=None):
+        """kinds가 None이면 전부 가린다. 집합이면 그 항목만 가리고 나머지는 원문 그대로 둔다."""
         changes = []
 
         def repl(m):
             original = m.group(0)
             pos = m.start()
+            if _is_title_span(text, pos, pos + len(original)):
+                return original   # 학번·이름·연락처 같은 제목은 바꾸지 않는다
             value = kind = None
 
             if m.group("email") is not None:
-                value, kind = "[이메일]", "이메일"
+                if kind_enabled(kinds, "이메일"):
+                    value, kind = "[이메일]", "이메일"
             elif m.group("rrn") is not None:
-                value, kind = "[주민번호]", "주민번호"
+                if kind_enabled(kinds, "주민번호"):
+                    value, kind = "[주민번호]", "주민번호"
             elif m.group("phone") is not None:
-                entries = self._phones.get(re.sub(r"\D", "", original))
+                raw = self._phones.get(re.sub(r"\D", "", original))
+                entries = self._keep(raw, kinds)
                 if entries:
                     value, kind = self._resolve(entries, text, pos)
-                else:
+                elif not raw and kind_enabled(kinds, "사전에없음"):
                     value, kind = "[전화번호]", "사전에없음"
             elif m.group("birth") is not None:
-                entries = self._births.get(m.group("by") + m.group("bm") + m.group("bd"))
+                entries = self._keep(self._births.get(m.group("by") + m.group("bm") + m.group("bd")), kinds)
                 if entries:  # 사전에 없는 날짜는 그대로 둔다
                     value, kind = self._resolve(entries, text, pos)
             elif "lit" in m.re.groupindex and m.group("lit") is not None:
-                value, kind = self._resolve(self._lit[original], text, pos)
+                entries = self._keep(self._lit[original], kinds)
+                if entries:
+                    value, kind = self._resolve(entries, text, pos)
             elif "given" in m.re.groupindex and m.group("given") is not None:
-                value, kind = self._resolve(self._given[m.group("gn")], text, pos)
+                entries = self._keep(self._given[m.group("gn")], kinds)
+                if entries:
+                    value, kind = self._resolve(entries, text, pos)
             elif "sgiven" in m.re.groupindex and m.group("sgiven") is not None:
-                value, kind = self._resolve(self._staff_given[m.group("sgn")], text, pos)
+                entries = self._keep(self._staff_given[m.group("sgn")], kinds)
+                if entries:
+                    value, kind = self._resolve(entries, text, pos)
             elif "sid" in m.re.groupindex and m.group("sid") is not None:
-                value, kind = self._resolve(self._ids[original], text, pos)
+                entries = self._keep(self._ids[original], kinds)
+                if entries:
+                    value, kind = self._resolve(entries, text, pos)
 
             if value is None:
                 return original
@@ -210,6 +280,47 @@ class Dictionary:
             return value
 
         return self._pattern.sub(repl, text), changes
+
+    def present_kinds(self, text):
+        """이 글에서 실제로 가릴 수 있는 항목 키. 없는 항목은 넣지 않는다."""
+        found = set()
+        if not text:
+            return found
+
+        def take(entries):
+            for entry in entries or []:
+                key = _KIND_OPTION.get(entry.kind)
+                if key:
+                    found.add(key)
+
+        def repl(m):
+            original = m.group(0)
+            if _is_title_span(text, m.start(), m.end()):
+                return original
+            if m.group("email") is not None:
+                found.add("이메일")
+            elif m.group("rrn") is not None:
+                found.add("주민번호")
+            elif m.group("phone") is not None:
+                raw = self._phones.get(re.sub(r"\D", "", original))
+                if raw:
+                    take(raw)
+                else:
+                    found.add("사전에없음")
+            elif m.group("birth") is not None:
+                take(self._births.get(m.group("by") + m.group("bm") + m.group("bd")))
+            elif "lit" in m.re.groupindex and m.group("lit") is not None:
+                take(self._lit[original])
+            elif "given" in m.re.groupindex and m.group("given") is not None:
+                take(self._given[m.group("gn")])
+            elif "sgiven" in m.re.groupindex and m.group("sgiven") is not None:
+                take(self._staff_given[m.group("sgn")])
+            elif "sid" in m.re.groupindex and m.group("sid") is not None:
+                take(self._ids[original])
+            return original
+
+        self._pattern.sub(repl, text)
+        return found
 
 
 def load_dictionary(path=None):
@@ -248,8 +359,11 @@ def _rows_to_dicts(rows):
     return out
 
 
-def mask_text(text, dictionary):
-    """text를 치환해서 (바뀐 글자, 변경 목록)을 돌려준다."""
+def mask_text(text, dictionary, kinds=None):
+    """text를 치환해서 (바뀐 글자, 변경 목록)을 돌려준다.
+
+    kinds가 None이면 전부 가린다. 아니면 MASK_OPTIONS의 키 중에서 고른 것만 가린다.
+    """
     if not text:
         return text, []
-    return dictionary.mask(text)
+    return dictionary.mask(text, kinds)

@@ -6,7 +6,7 @@
 하는 일 (순서대로):
  1) PyInstaller 로 폴더형(--onedir) · 콘솔 없음(--noconsole) 으로 빌드
     -> dist/개인정보가리개/개인정보가리개.exe
- 2) ui/ 와 samples/ 를 결과 폴더(exe 옆)에 함께 넣는다
+ 2) ui/ 를 결과 폴더(exe 옆)에 함께 넣는다. samples/ 는 테스트용이라 넣지 않는다
  3) 결과 폴더에 data/·output/·logs/ 가 있으면 반드시 뺀다 (실제 학생 사전이 섞이면 안 됨)
  4) dist/개인정보가리개/ 를 dist/개인정보가리개.zip 으로 압축
  5) zip 안에 data 폴더나 학생사전.xlsx 가 없는지 검사해서 결과를 출력
@@ -31,8 +31,8 @@ APP_DIR = DIST / APP_NAME               # 최종 결과 폴더
 EXE = APP_DIR / f"{APP_NAME}.exe"
 ZIP_PATH = DIST / f"{APP_NAME}.zip"
 
-INCLUDE_DIRS = ["ui", "samples"]        # exe 옆에 함께 넣을 폴더
-INCLUDE_FILES = ["사용설명서.md"]       # exe 옆에 함께 넣을 파일
+INCLUDE_DIRS = ["ui"]                    # exe 옆에 함께 넣을 폴더. samples/ 는 배포하지 않는다
+INCLUDE_FILES = ["사용설명서.md", "assets/jeio_logo.png"]       # exe 옆에 함께 넣을 파일
 EXCLUDE_DIRS = ["data", "output", "logs"]   # 배포에서 반드시 빼는 폴더
 
 # 빠지면 안 되는 부품 (설치돼 있을 때만 넣는다)
@@ -123,7 +123,9 @@ def add_extra_dirs():
         if not src.exists():
             print(f"  (없음) {name} 파일이 프로젝트에 없어 건너뜀")
             continue
-        shutil.copy2(src, APP_DIR / name)
+        dst = APP_DIR / name
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
         print(f"  포함: {name}")
 
 
@@ -240,7 +242,7 @@ def main():
         sys.exit(1)
     print(f"\n[1/5] 빌드 완료: {EXE}")
 
-    print("[2/5] ui/ · samples/ · 사용설명서 포함")
+    print("[2/5] ui/ · 사용설명서 포함")
     add_extra_dirs()
 
     print("[3/5] data/ · output/ · logs/ 제외")
