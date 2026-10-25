@@ -85,6 +85,8 @@ def main(argv):
         print("⚠ 남은 개인정보")
         for f in findings:
             print(f"  - {f.sheet} / {f.location}: [{f.kind}] {f.value}")
+        ai_path.unlink(missing_ok=True)   # 남으면 AI용 파일을 남기지 않는다 (2026-10-25)
+        print(f"→ AI용 파일을 지웠습니다: {ai_path.name}")
         return 2
     print("✅ 남은 개인정보 없음")
     return 0

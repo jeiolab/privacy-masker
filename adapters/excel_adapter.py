@@ -18,6 +18,8 @@ from openpyxl.utils import get_column_letter
 from core.masker import mask_text
 from core.restorer import unmask_text
 
+_FORMULA_STR = re.compile(r'"((?:[^"]|"")*)"')   # 수식 안 "글자" (안의 "" 는 따옴표 하나)
+
 SHEET_NAME_MAX = 31
 _BAD_SHEET_CHARS = re.compile(r"[\\/?*\[\]:]")
 _BAD_FILE_CHARS = re.compile(r'[\\/:*?"<>|\[\]]')
@@ -159,6 +161,50 @@ def _walk_workbook(src_path, dst_path, fn):
                             loc = f"{cell.coordinate} ({label})"
                             changes.extend(Change(old, ws.title, loc, o, n, k) for o, n, k in res[1])
                             warn_all(old, loc, res[2])
+
+    # 3) 칸 밖: 수식 안 글자, 머리글·바닥글, 데이터 유효성 목록, 이름 정의, 문서 속성 (2026-10-25 빈틈 시험)
+    def put(sheet, title, where, text):
+        if not isinstance(text, str) or not text:
+            return None
+        r = fn(text)
+        if not r:
+            return None
+        changes.extend(Change(sheet, title, where, o, n, k) for o, n, k in r[1])
+        warn_all(sheet, where, r[2])
+        return r[0]
+
+    def literals(sheet, title, where, formula):   # 수식은 큰따옴표 안 글자만 바꾼다(참조·함수는 그대로)
+        if not isinstance(formula, str) or '"' not in formula:
+            return formula
+        return _FORMULA_STR.sub(lambda m: '"' + (put(sheet, title, where, m.group(1)) or m.group(1)) + '"', formula)
+
+    for ws, old in zip(sheets, old_titles):
+        for row in ws.iter_rows():
+            for cell in row:
+                if not isinstance(cell, MergedCell) and cell.data_type == "f" and isinstance(cell.value, str):
+                    cell.value = literals(old, ws.title, f"{cell.coordinate} (수식)", cell.value)
+        for hf_name in ("oddHeader", "oddFooter", "evenHeader", "evenFooter", "firstHeader", "firstFooter"):
+            hf = getattr(ws, hf_name, None)
+            for part in ("left", "center", "right"):
+                p = getattr(hf, part, None) if hf is not None else None
+                new = put(old, ws.title, f"({hf_name})", getattr(p, "text", None))
+                if new is not None:
+                    p.text = new
+        for dv in ws.data_validations.dataValidation:
+            for attr in ("formula1", "formula2", "prompt", "promptTitle", "error", "errorTitle"):
+                v = getattr(dv, attr, None)
+                nv = literals(old, ws.title, "(데이터 유효성)", v) if attr.startswith("formula") else put(old, ws.title, "(데이터 유효성)", v)
+                if nv is not None and nv != v:
+                    setattr(dv, attr, nv)
+        for dn in getattr(ws, "defined_names", {}).values():
+            dn.attr_text = literals(old, ws.title, f"(이름 정의 {dn.name})", dn.attr_text)
+    for dn in wb.defined_names.values():
+        dn.attr_text = literals("(통합 문서)", "", f"(이름 정의 {dn.name})", dn.attr_text)
+    props = wb.properties
+    for attr in ("creator", "lastModifiedBy", "title", "subject", "description", "keywords", "category"):
+        new = put("(문서 속성)", "", attr, getattr(props, attr, None))
+        if new is not None:
+            setattr(props, attr, new)
 
     wb.save(dst_path)
     return changes, warnings

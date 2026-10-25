@@ -248,7 +248,124 @@ def check_file(path, dictionary, kinds=None):
                 if cell.comment is not None:
                     check(ws.title, f"{cell.coordinate} (메모)", cell.comment.text or "")
                     check(ws.title, f"{cell.coordinate} (메모 작성자)", cell.comment.author or "")
+    # 칸 밖(수식·머리글·유효성·이름 정의·문서 속성·피벗·차트 등)은 파일 속 XML 글자를 통째로 본다 (2026-10-25)
+    seen = {(f.kind, f.value) for f in findings}
+    for part, text in _xml_texts(path):
+        for kind, word in _scan(text, p):
+            if (kind, word) not in seen:
+                seen.add((kind, word))
+                findings.append(Finding("(칸 밖)", part, kind, word))
     return findings
+
+
+_ATTR = re.compile(r"""([\w:.-]+)\s*=\s*(["'])(.*?)\2""", re.S)   # 여는 따옴표와 같은 따옴표에서만 끝난다
+# 칸 주소·행 번호·서식 번호처럼 내용이 아닌 속성 — 「A1001」「r="1001"」을 학번으로 보지 않게
+_STRUCT_ATTRS = {
+    "r", "ref", "sqref", "spans", "s", "t", "ht", "min", "max", "width", "style", "xfId", "numFmtId",
+    "fontId", "fillId", "borderId", "count", "uniqueCount", "id", "r:id", "sheetId", "topLeftCell",
+    "activeCell", "activeTab", "tabSelected", "workbookViewId", "pane", "xSplit", "ySplit", "x", "y",
+    "outlineLevel", "customHeight", "customWidth", "baseColWidth", "defaultRowHeight", "dyDescent",
+    "si", "cm", "vm", "ca", "aca", "dxfId", "priority", "rgb", "theme", "tint", "indexed", "sz", "val",
+    "xmlns", "Type", "TargetMode", "mc:Ignorable", "xr:uid", "x14ac:dyDescent", "fld", "item",
+}
+
+
+def _attr_values(tag):
+    from urllib.parse import unquote
+    # 링크 주소(Target)는 검사하고, %로 감싼 글자도 풀어서 본다 (강희 지적)
+    return [unquote(v) if k == "Target" else v for k, _, v in _ATTR.findall(tag) if k not in _STRUCT_ATTRS and not k.startswith("xmlns")]
+
+
+# 공유문자열 칸 <c t="s"><v>N</v></c> 의 N 은 글이 아니라 sharedStrings 번호 — 학번으로 보지 않게 걷어 낸다 (강희 지적)
+# 글자 조각(run)을 감싸는 태그 — 서식만 다른 조각이 한 낱말이면 이어 붙여야 이름이 보인다(「가상」+「인물」, 강희 지적).
+#   서식 속성값(lang="ko-KR", sz="1100")도 조각 사이에 끼지 않게 통째로 지운다
+_RUN_TAGS = {"t", "r", "rPr", "rFont", "sz", "b", "i", "u", "strike", "color", "family", "scheme", "charset", "outline",
+             "shadow", "condense", "extend", "vertAlign", "latin", "ea", "cs", "sym", "solidFill", "srgbClr", "schemeClr"}
+_TAG = re.compile(r"<(/?)([\w.-]+:)?([\w.-]+)([^>]*)>")
+
+
+def _tag_text(m):
+    if m.group(3) in _RUN_TAGS: return ""
+    return " " + " ".join(_attr_values(m.group(0))) + " "
+
+
+# 수식·차트 참조식(<f>, <c:f>) 속 칸 주소(Sheet1!$A$1001)는 학번이 아니다 — 큰따옴표 안 글자는 그대로 검사한다 (강희 지적)
+#   유효성 목록(<formula1>)·이름 정의(<definedName>)의 범위 참조도 같다 (강희 지적)
+_REF_TAGS = {"f", "formula", "formula1", "formula2", "definedName"}
+_F_ELEM = re.compile(r"(<(?:[\w.-]+:)?(f|formula|formula1|formula2|definedName)\b[^>]*(?<!/)>)(.*?)(</(?:[\w.-]+:)?\2>)", re.S)
+#   행 통째 범위($1001:$1001 — 인쇄 제목 같은 것)도 칸 주소다 (강희 지적)
+_CELL_REF = re.compile(r"(?<![\w$.])(?:\$?[A-Za-z]{1,3}\$?\d+(?![\w(])|\$?\d+:\$?\d+(?![\w.]))")
+
+
+def _drop_refs(formula):
+    return "".join(p if p.startswith('"') else _CELL_REF.sub(" ", p) for p in re.split(r'("[^"]*")', formula))
+
+
+#   빈 칸 <c t="s"/> 은 닫는 태그가 없으니 걸지 않는다 — 걸면 다음 칸의 숫자(진짜 학번)까지 걷힌다
+_SST_CELL = re.compile(r"""(<c\b[^>]*\bt\s*=\s*(["'])s\2[^>]*(?<!/)>)(.*?)(</c>)""", re.S)
+
+
+def _local(name):
+    return name.rsplit("}", 1)[-1]
+
+
+def _parsed_text(data):
+    """XML 바이트를 파서로 읽어 검사할 글자로. 못 읽으면 None.
+    글자 조각(run)은 이어 붙이고, 그 밖의 요소 사이엔 빈칸. 구조 속성·서식 속성은 빼고, 공유문자열 번호·참조식 칸 주소는 걷는다."""
+    import xml.etree.ElementTree as ET
+    from urllib.parse import unquote
+    try:
+        root = ET.fromstring(data)
+    except (ET.ParseError, ValueError):
+        return None
+    out = []
+
+    def walk(el, skip_v):
+        tag = _local(el.tag)
+        run = tag in _RUN_TAGS
+        if not run:
+            out.append(" ")
+            for k, v in el.attrib.items():
+                kl = _local(k)
+                if kl in _STRUCT_ATTRS or k in _STRUCT_ATTRS or k.startswith("xmlns"): continue
+                out.append(" " + (unquote(v) if kl == "Target" else v) + " ")
+        t = el.text or ""
+        if tag == "v" and skip_v: t = ""
+        elif tag in _REF_TAGS: t = _drop_refs(t)
+        out.append(t)
+        sst = tag == "c" and el.get("t") == "s"
+        for ch in el:
+            walk(ch, sst)
+            out.append(ch.tail or "")
+        if not run: out.append(" ")
+
+    walk(root, False)
+    return "".join(out)
+
+
+def _xml_texts(path):
+    """엑셀(zip) 안 XML 마다 (부분 이름, 태그를 걷어 낸 글자)."""
+    import html, zipfile
+    try:
+        z = zipfile.ZipFile(path)
+    except (zipfile.BadZipFile, OSError):
+        return []
+    out = []
+    with z:
+        for name in z.namelist():
+            if name.endswith((".xml", ".rels", ".vml")):
+                data = z.read(name)
+                text = _parsed_text(data)   # XML 파서로 — 속성값 안 「>」, UTF-16 파일도 바르게 읽는다 (강희 지적)
+                if text is not None:
+                    out.append((name, text)); continue
+                # 파서가 못 읽는 것(깨진 XML·vml)은 아래 정규식 길로
+                raw = data.decode("utf-8", "replace")
+                raw = _SST_CELL.sub(lambda m: m.group(1) + re.sub(r"<v>\s*\d+\s*</v>", "", m.group(3)) + m.group(4), raw)
+                # 태그는 걷되 속성값은 남긴다 (피벗 캐시 <s v="…"/>, 유효성 prompt="…" 같은 자리)
+                raw = _F_ELEM.sub(lambda m: m.group(1) + _drop_refs(m.group(3)) + m.group(4), raw)
+                text = re.sub(r"<[^>]*>", " ", _TAG.sub(_tag_text, raw))   # 남은 <?xml …?>·<!-- --> 같은 것은 걷는다
+                out.append((name, html.unescape(text)))
+    return out
 
 
 def check_text(text, dictionary, kinds=None):

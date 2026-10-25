@@ -584,6 +584,131 @@ def item8(d, tmp):
 
 
 # ---------------------------------------------------------------- 실행
+def item9(d, tmp):
+    """칸 밖(수식 글자·머리글·바닥글·유효성 목록·이름 정의·문서 속성)도 가리고, 남으면 검사가 잡는지."""
+    from openpyxl import Workbook
+    from openpyxl.workbook.defined_name import DefinedName
+    from openpyxl.worksheet.datavalidation import DataValidation
+
+    n = [s["성명"] for s in d.students if not s.get("주의")][:8]
+    src, dst = tmp / "칸밖_원본.xlsx", tmp / "칸밖_가림.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws["A1"] = f'="{n[0]}"&" 학생"'
+    ws.oddHeader.center.text = f"{n[1]} 성적표"
+    ws.oddFooter.right.text = n[2]
+    dv = DataValidation(type="list", formula1=f'"{n[3]},{n[4]}"', prompt=f"{n[7]} 확인")   # prompt 는 XML 속성값
+    ws.add_data_validation(dv)
+    dv.add("B1")
+    wb.defined_names["대표"] = DefinedName("대표", attr_text=f'"{n[5]}"')
+    wb.properties.creator = n[6]
+    wb.properties.title = f"{n[0]} 기록"
+    wb.save(src)
+
+    bad = []
+    before = {f.value for f in check_file(src, d)}
+    missed = [x for x in n if x not in before]
+    if missed:
+        bad.append(f"[검사] 가리기 전 원본에서 못 찾은 이름 {len(missed)}개")
+    mask_workbook(src, dst, d)
+    findings = check_file(dst, d)
+    if findings:
+        bad.append(f"[가림] 남은 개인정보 {len(findings)}건: {_finding_text(findings)}")
+    from openpyxl import load_workbook
+    out = load_workbook(dst)
+    if not str(out.active["A1"].value).startswith('="') or '&" 학생"' not in str(out.active["A1"].value):
+        bad.append(f"[수식] 따옴표 밖이 바뀜: {out.active['A1'].value!r}")
+    # 가리개가 손대지 않는 속성값 자리(피벗 캐시 꼴)에만 이름이 있어도 검사가 잡는지
+    import zipfile
+    raw = tmp / "칸밖_속성.xlsx"
+    with zipfile.ZipFile(dst) as zin, zipfile.ZipFile(raw, "w") as zout:
+        for item in zin.infolist():
+            zout.writestr(item, zin.read(item.filename))
+        zout.writestr("xl/pivotCache/pivotCacheDefinition1.xml",
+                      f'<pivotCacheDefinition><sharedItems><s v="{n[0]}"/></sharedItems>'
+                      f'<x prompt="teacher\'s {n[1]} 안내"/></pivotCacheDefinition>')
+    got = {f.value for f in check_file(raw, d)}
+    if n[0] not in got:
+        bad.append("[검사] XML 속성값(피벗 캐시 꼴)에 남은 이름을 못 찾음")
+    if n[1] not in got:
+        bad.append("[검사] 다른 따옴표가 섞인 속성값 뒤쪽 이름을 못 찾음")
+    # 칸 주소·행 번호(r="…", ref="A1:C…")는 학번으로 보지 않는다
+    sid = next((s["학번"] for s in d.students if s.get("학번")), "")
+    if sid:
+        st = tmp / "칸밖_구조.xlsx"
+        with zipfile.ZipFile(dst) as zin, zipfile.ZipFile(st, "w") as zout:
+            for item in zin.infolist():
+                zout.writestr(item, zin.read(item.filename))
+            zout.writestr("xl/worksheets/sheet9.xml",
+                          f'<worksheet><dimension ref="A1:C{sid}"/><sheetData><row r="{sid}"><c r="A{sid}" t="s"/>'
+                          f'<c r="B2" s="1" t="s"><v>{sid}</v></c></row></sheetData></worksheet>')   # 공유문자열 번호 <v> 도 학번이 아님 (강희 지적)
+        if any(f.value == sid for f in check_file(st, d)):
+            bad.append("[검사] 행 번호·칸 주소를 학번으로 봄")
+        # 빈 공유문자열 칸 바로 뒤 숫자 칸의 진짜 학번은 잡아야 한다
+        st2 = tmp / "칸밖_숫자칸.xlsx"
+        with zipfile.ZipFile(dst) as zin, zipfile.ZipFile(st2, "w") as zout:
+            for item in zin.infolist():
+                zout.writestr(item, zin.read(item.filename))
+            zout.writestr("xl/worksheets/sheet9.xml",
+                          f'<worksheet><sheetData><row r="2"><c r="A2" t="s"/><c r="B2"><v>{sid}</v></c></row></sheetData></worksheet>')
+        if not any(f.value == sid for f in check_file(st2, d)):
+            bad.append("[검사] 빈 공유문자열 칸 뒤 숫자 칸의 학번을 놓침")
+        # 차트: 서식 때문에 두 조각으로 나뉜 이름은 이어서 찾고, 참조식 속 칸 주소는 학번으로 보지 않는다 (강희 지적)
+        ch = tmp / "칸밖_차트.xlsx"
+        with zipfile.ZipFile(dst) as zin, zipfile.ZipFile(ch, "w") as zout:
+            for item in zin.infolist():
+                zout.writestr(item, zin.read(item.filename))
+            zout.writestr("xl/charts/chart9.xml",
+                          f'<c:chart><c:title><c:tx><c:rich><a:p><a:r><a:rPr lang="ko-KR" b="1"/><a:t>{n[3][:1]}</a:t></a:r>'
+                          f'<a:r><a:rPr lang="ko-KR" sz="1100"/><a:t>{n[3][1:]}</a:t></a:r></a:p></c:rich></c:tx></c:title>'
+                          f'<c:ser><c:val><c:numRef><c:f>Sheet1!$A${sid}:$A${sid}</c:f></c:numRef></c:val></c:ser></c:chart>')
+        got = {f.value for f in check_file(ch, d)}
+        if n[3] not in got:
+            bad.append("[검사] 서식으로 나뉜 차트 제목의 이름을 놓침")
+        if sid in got:
+            bad.append("[검사] 차트 참조식의 칸 주소를 학번으로 봄")
+        # 속성값 안 「>」, UTF-16 XML 의 이름도 찾고, 유효성 목록·이름 정의의 범위 참조는 학번으로 보지 않는다 (강희 지적)
+        px = tmp / "칸밖_파서.xlsx"
+        with zipfile.ZipFile(dst) as zin, zipfile.ZipFile(px, "w") as zout:
+            for item in zin.infolist():
+                zout.writestr(item, zin.read(item.filename))
+            zout.writestr("xl/worksheets/sheet7.xml",
+                          f'<worksheet><dataValidations><dataValidation sqref="A1" prompt="{n[4]} &gt; 기준" promptTitle="{n[5]} > 기준">'
+                          f'<formula1>Sheet1!$A${sid}:$A${sid}</formula1></dataValidation></dataValidations></worksheet>')
+            zout.writestr("xl/extra16.xml", f'<?xml version="1.0" encoding="UTF-16"?><x><y>{n[6]}</y></x>'.encode("utf-16"))
+            zout.writestr("xl/workbook9.xml", f'<workbook><definedNames><definedName name="범위">Sheet1!$B${sid}</definedName>'
+                          f'<definedName name="_xlnm.Print_Titles">Sheet1!${sid}:${sid},Sheet1!{sid}:{sid}</definedName></definedNames></workbook>')
+        got = {f.value for f in check_file(px, d)}
+        for who, why in ((n[4], "속성값 「&gt;」 앞"), (n[5], "속성값 「>」 앞"), (n[6], "UTF-16 XML")):
+            if who not in got:
+                bad.append(f"[검사] {why}의 이름을 놓침")
+        if sid in got:
+            bad.append("[검사] 유효성 목록·이름 정의의 범위 참조를 학번으로 봄")
+    # 외부 링크(rels Target, %로 감싼 것 포함)에 남은 이름도 찾는다 (강희 지적)
+    from urllib.parse import quote
+    lk = tmp / "칸밖_링크.xlsx"
+    with zipfile.ZipFile(dst) as zin, zipfile.ZipFile(lk, "w") as zout:
+        for item in zin.infolist():
+            zout.writestr(item, zin.read(item.filename))
+        zout.writestr("xl/worksheets/_rels/sheet8.xml.rels",
+                      f'<Relationships><Relationship Id="rId1" Type="x" Target="https://e.x/?q={quote(n[2])}" TargetMode="External"/></Relationships>')
+    if n[2] not in {f.value for f in check_file(lk, d)}:
+        bad.append("[검사] 외부 링크 Target 에 남은 이름을 못 찾음")
+    # 가리고도 남은 게 있으면 AI용 파일을 남기지 않는다 (2026-10-25 캡틴 「권함대로」)
+    import workflows as wf
+    wf.AI_DIR.mkdir(parents=True, exist_ok=True)
+    for left, keep in (([("피벗", "이름", "가상")], False), ([], True)):
+        f = wf.AI_DIR / "_시험_남음검사.xlsx"
+        f.write_bytes(b"x")
+        r = wf._finish(f, None, "본문", 1, [], left)
+        if f.exists() != keep or r.ok != keep or (not keep and (r.text or r.ai_paths or r.can_copy)):
+            bad.append(f"[남음] {'남은 게 있을 때 AI용 파일·글이 남음' if left else '깨끗할 때 파일이 사라짐'}")
+        f.unlink(missing_ok=True)
+    if bad:
+        return FAIL, bad
+    return PASS, ["수식 글자·머리글·바닥글·유효성(안내문 포함)·이름 정의·문서 속성 모두 가림, 원본에선 8개 다 찾음, 피벗 캐시 속성값도 잡음"]
+
+
 def main():
     print("개인정보 가리개 - 통합 테스트")
     print("(samples/ 가짜 데이터 + 임시 가짜 사전만 사용 · 실제 사전은 건드리지 않음)")
@@ -602,6 +727,7 @@ def main():
             ("6. 교직원 치환 · 이름 의심 경고", lambda: item6(dict_path, tmp)),
             ("7. 데이터 폴더가 프로그램 폴더 밖에 있는지", item7),
             ("8. 이름대응 저장·복원 · 워드/피피티 부가 · 여러 파일", lambda: item8(d, tmp)),
+            ("9. 엑셀 칸 밖(수식·머리글·유효성·이름 정의·문서 속성)", lambda: item9(d, tmp)),
         ]
         for title, fn in plan:
             try:

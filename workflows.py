@@ -545,7 +545,12 @@ def _finish(ai_path, keep_path, text, total, review, findings, suspects=(), name
     saved = f"저장: {ai_path.relative_to(BASE_DIR)}"
     kept = [label for key, label in MASK_OPTIONS if not kind_enabled(kinds, key)]
     if findings:
-        headline = f"⚠ 개인정보가 {len(findings)}건 남았어요. AI에 올리지 마세요 ({saved})"
+        # 남은 게 있으면 AI용 파일을 남기지 않는다 — 피벗·차트처럼 가리개가 못 고치는 자리라 그대로 두면 새어 나간다 (2026-10-25 캡틴 「권함대로」)
+        ai_path.unlink(missing_ok=True)
+        headline = f"⚠ 개인정보가 {len(findings)}건 남아 AI용 파일을 만들지 않았어요. 아래 위치를 원본에서 지우고 다시 가려 주세요"
+        return MaskResult(ok=False, clean=False, headline=headline, text="", ai_path=ai_path, ai_paths=[],
+                          keep_path=keep_path, total_changes=total, review=review, findings=findings,
+                          suspects=list(suspects), name_map=name_map or {})
     elif kept:
         headline = f"✅ 고른 항목은 가렸어요. 그대로 둔 항목이 글에 있어요  ({saved})"
     else:
